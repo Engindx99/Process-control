@@ -1,73 +1,106 @@
 import gymnasium as gym
 import numpy as np
-from mcp import RotaryKilnMPC # Yazdığın MPC sınıfını içe aktarıyoruz
 from stable_baselines3 import PPO
+
+from control.mpc import AdvancedRotaryKilnMPC
+from physics.digital_twin import AdvancedRotaryKiln
+
 
 class RotaryKilnEnv(gym.Env):
     def __init__(self):
-        super(RotaryKilnEnv, self).__init__()
-        
-        # MPC ve Fiziksel Yapı
-        self.controller = RotaryKilnMPC()
-        
-        # RL Aksiyon Alanı: MPC için Setpoint değişimi (-20 ile +20 derece arası müdahale)
-        self.action_space = gym.spaces.Box(low=-20, high=20, shape=(1,), dtype=np.float32)
-        
-        # RL Gözlem Alanı: [Mevcut Sıcaklık, Önceki Yakıt Miktarı, Besleme Hızı]
+        super().__init__()
+
+        # ---------------- SYSTEM ----------------
+        self.mpc = AdvancedRotaryKilnMPC()
+        self.plant = AdvancedRotaryKiln()
+
+        # ---------------- RL SPACE ----------------
+        self.action_space = gym.spaces.Box(
+            low=-10, high=10, shape=(1,), dtype=np.float32
+        )
+
+        # state: [temp, oxygen]
         self.observation_space = gym.spaces.Box(
-            low=np.array([500, 0, 0]), 
-            high=np.array([1600, 15, 10]), 
+            low=np.array([800, 0]),
+            high=np.array([1600, 10]),
             dtype=np.float32
         )
-        
-        self.state = np.array([1200.0, 5.0, 5.0], dtype=np.float32)
-        self.target_base = 1400.0 # İdeal baz sıcaklık
+
+        # ---------------- INITIALS ----------------
+        self.base_setpoint = 1400.0
+        self.setpoint = 1400.0
+        self.feed_rate = 5.0
 
     def step(self, action):
-        current_temp = self.state[0]
-        feed_rate = self.state[2]
-        
-        # 1. RL'den gelen aksiyonla yeni hedef sıcaklığı belirle
-        target_temp = self.target_base + action[0]
-        
-        # 2. MPC'yi çalıştır ve optimal yakıt miktarını al
-        # MPC burada kısıtlamaları (constraints) kontrol eder
-        fuel_suggestion = self.controller.step(current_temp, target_temp, feed_rate)
-        
-        # 3. Fiziksel Simülasyonu ilerlet (Basitleştirilmiş bir adım)
-        # Gerçekte bu kısım digital_twin.py'den beslenir
-        new_temp = current_temp + (fuel_suggestion * 5) - (feed_rate * 2) + np.random.normal(0, 1)
-        
-        # 4. Ödül Hesaplama (Reward)
-        # Ceza 1: Hedef sıcaklıktan sapma
-        temp_error = abs(new_temp - target_temp)
-        # Ceza 2: Yüksek yakıt tüketimi
-        fuel_cost = fuel_suggestion * 0.5
-        
-        reward = -(temp_error * 0.1) - fuel_cost
-        
-        # State güncelleme
-        self.state = np.array([new_temp, fuel_suggestion, feed_rate], dtype=np.float32)
-        
-        done = False # Endüstriyel süreçler genelde süreklidir
-        truncated = False
-        
-        return self.state, reward, done, truncated, {}
+
+        # 1) RL SETPOINT
+        self.setpoint = self.base_setpoint + float(action[0])
+
+        # 2) MPC update (TVP injection)
+        def tvp_fun(t_now):
+            tvp = self.mpc.mpc.get_tvp_template()
+            tvp['_tvp', :, 'temp_setpoint'] = self.setpoint
+            tvp['_tvp', :, 'material_feed'] = self.feed_rate
+            return tvp
+
+        self.mpc.mpc.set_tvp_fun(tvp_fun)
+
+        # 3) MPC CONTROL
+        temp = self.plant.current_temp
+        fuel, fan = self.mpc.step(temp)
+
+        # 4) REAL DIGITAL TWIN DYNAMICS
+        new_temp = self.plant.calculate_dynamics(fuel, self.feed_rate, fan)
+        new_o2 = self.plant.oxygen_level
+
+        # 5) REWARD
+        error = abs(new_temp - self.setpoint)
+        energy_penalty = 0.01 * fuel + 0.001 * fan
+
+        reward = -error - energy_penalty
+
+        # 6) UPDATE STATE
+        self.feed_rate = np.clip(
+            self.feed_rate + np.random.normal(0, 0.1),
+            3.0, 7.0
+        )
+
+        obs = np.array([new_temp, new_o2], dtype=np.float32)
+
+        return obs, reward, False, False, {}
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.state = np.array([1200.0, 5.0, 5.0], dtype=np.float32)
-        return self.state, {}
 
-# --- EĞİTİM BÖLÜMÜ ---
+        self.plant.reset()
+        self.setpoint = self.base_setpoint
+        self.feed_rate = 5.0
+
+        obs = np.array(
+            [self.plant.current_temp, self.plant.oxygen_level],
+            dtype=np.float32
+        )
+
+        return obs, {}
+
+
+# ---------------- TRAIN ----------------
 if __name__ == "__main__":
+
     env = RotaryKilnEnv()
-    
-    # PPO Algoritması ile eğitim
-    model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.0003)
-    
-    print("Eğitim başlıyor... MPC + RL hibrit model devrede.")
-    model.learn(total_timesteps=10000)
-    
-    # Modeli kaydet
-    model.save("../../models/kiln_rl_mpc_model")
+
+    model = PPO(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        learning_rate=3e-4,
+        n_steps=1024,
+        batch_size=64,
+        gamma=0.99
+    )
+
+    print("Training started: RL + MPC + Digital Twin")
+
+    model.learn(total_timesteps=20000)
+
+    model.save("kiln_hybrid_rl_mpc")

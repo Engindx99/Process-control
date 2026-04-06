@@ -1,46 +1,84 @@
 import numpy as np
 
-class RotaryKilnPhysics:
+class AdvancedRotaryKiln:
     def __init__(self):
-        # Sabit Parametreler (Fabrika verileri gibi düşünebiliriz)
-        self.mass = 5000.0         # Fırın içindeki malzemenin efektif kütlesi (kg)
-        self.cp = 1.1              # Özgül ısı kapasitesi (kJ/kg.K)
-        self.heat_transfer_coeff = 0.05 # Çevreye ısı kaybı katsayısı
-        self.ambient_temp = 25.0    # Ortam sıcaklığı (°C)
-        
-        # Değişken Durumlar (States)
-        self.current_temp = 1200.0  # Başlangıç iç sıcaklığı (°C)
-        self.oxygen_level = 3.0     # O2 seviyesi (%)
+        # --- Sabitler ---
+        self.mass = 5000.0
+        self.cp = 1.1
 
-    def calculate_dynamics(self, fuel_rate, material_feed, fan_speed):
+        # Heat loss coefficients
+        self.k_conv = 0.04
+        self.k_rad = 1e-10   # radyasyon (T^4 etkisi)
+
+        self.ambient_temp = 25.0
+
+        # --- State ---
+        self.current_temp = 1200.0
+        self.oxygen_level = 3.0
+
+        # --- Limits ---
+        self.max_temp = 1500
+        self.min_temp = 800
+
+    # -----------------------------
+    # 🔥 Yanma verimi modeli
+    # -----------------------------
+    def combustion_efficiency(self, oxygen_level, fan_speed):
         """
-        Fırın dinamiklerini hesaplar (Euler integrasyonu ile basitleştirilmiş)
-        fuel_rate: Yakıt giriş miktarı (kg/s)
-        material_feed: Hammadde besleme hızı (kg/s)
-        fan_speed: Fan devri (soğuma etkisi)
+        O2 ve fan etkisine göre yanma verimi (0-1 arası)
         """
-        # 1. Isı Kazancı (Yakıt Alt Isıl Değeri ~ 30,000 kJ/kg kabul edilirse)
-        q_in = fuel_rate * 30000 
-        
-        # 2. Isı Kayıpları (Radyasyon ve Konveksiyon basitleştirmesi)
-        q_loss = self.heat_transfer_coeff * (self.current_temp - self.ambient_temp)
-        
-        # 3. Hammaddeye Aktarılan Isı
-        q_material = material_feed * self.cp * (self.current_temp - 100) # 100 giriş temp varsayımı
-        
-        # 4. Sıcaklık Değişimi (dT/dt)
-        # Basitleştirilmiş diferansiyel: dT = (Q_in - Q_loss - Q_material) / (m * Cp)
-        dt = (q_in - q_loss - q_material) / (self.mass * self.cp)
-        
-        # Zaman adımı (Delta T = 1 saniye gibi düşünelim)
-        self.current_temp += dt
-        
-        # Rastgele gürültü ekleyerek gerçekçiliği artıralım (Endüstriyel gürültü)
-        self.current_temp += np.random.normal(0, 0.5)
-        
-        return self.current_temp
+        # O2 optimum ~3-5%
+        o2_eff = np.exp(-0.1 * (oxygen_level - 4)**2)
+
+        # Fan çok düşükse yanma kötü, çok yüksekse cooling
+        fan_eff = np.tanh(fan_speed / 50)
+
+        return 0.6 + 0.4 * o2_eff * fan_eff
+
+    # -----------------------------
+    # 🌡️ Dinamik model
+    # -----------------------------
+    def step(self, fuel_rate, material_feed, fan_speed):
+        # --- 1. Yanma verimi ---
+        eta = self.combustion_efficiency(self.oxygen_level, fan_speed)
+
+        # --- 2. Isı girişi ---
+        q_in = fuel_rate * 30000 * eta
+
+        # --- 3. Isı kaybı (nonlinear) ---
+        T = self.current_temp
+        Ta = self.ambient_temp
+
+        q_loss = self.k_conv * (T - Ta) + self.k_rad * (T**4 - Ta**4)
+
+        # --- 4. Hammadde etkisi ---
+        feed_temp = 100
+        q_material = material_feed * self.cp * (T - feed_temp)
+
+        # --- 5. Fan ile ekstra soğutma ---
+        q_fan_cooling = 0.02 * fan_speed * (T - Ta)
+
+        # --- 6. Diferansiyel ---
+        dT = (q_in - q_loss - q_material - q_fan_cooling) / (self.mass * self.cp)
+
+        # --- 7. Zaman entegrasyonu ---
+        dt = 1.0
+        self.current_temp += dT * dt
+
+        # --- 8. Gürültü ---
+        noise = np.random.normal(0, 0.3)
+        self.current_temp += noise
+
+        # --- 9. Fiziksel sınırlar ---
+        self.current_temp = np.clip(self.current_temp, self.min_temp, self.max_temp)
+
+        # --- 10. O2 dinamiği (basit model) ---
+        self.oxygen_level += 0.01 * (fan_speed - 50) - 0.005 * fuel_rate
+        self.oxygen_level = np.clip(self.oxygen_level, 1, 10)
+
+        return self.current_temp, self.oxygen_level
 
     def reset(self):
-        """Sistemi başlangıç değerlerine döndürür"""
         self.current_temp = 1200.0
-        return self.current_temp
+        self.oxygen_level = 3.0
+        return self.current_temp, self.oxygen_level
