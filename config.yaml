@@ -1,0 +1,23 @@
+# Proje Genel Ayarları
+project:
+  name: "RotaryKiln_Hybrid_Control"
+  output_dir: "outputs"
+  log_dir: "ppo_kiln_tensorboard"
+
+# RL (Reinforcement Learning) Ayarları
+rl:
+  total_timesteps: 60000
+  learning_rate: 0.0002
+  n_steps: 2048
+  num_cpu: 10          # Az önceki hatayı çözen satır
+
+# Reward (Ödül) Katsayıları
+reward:
+  temp_weight: 1       # Sıcaklık baskısı azaldı
+  o2_weight: 50       # Oksijen cezası en üst seviyeye çıktı
+  fuel_weight: 0.05
+
+# Ortam ve Fizik Parametreleri (main.py'nin beklediği isimle)
+env:
+  target_base: 1400.0
+  feed_base: 5.0
