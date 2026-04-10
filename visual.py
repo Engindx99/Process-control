@@ -3,7 +3,7 @@ import pandas as pd
 import seaborn as sns
 from digital import RotaryKilnDigitalTwin
 
-df = pd.read_csv("digital_twin_output.csv")
+df = pd.read_csv("firin_dataset_5k.csv")
 
 def plot_1(df):
     plt.figure()
