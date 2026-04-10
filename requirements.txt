@@ -1,8 +1,0 @@
-numpy
-pandas
-gymnasium  # RL ortamı için
-stable-baselines3[extra]  # RL algoritmaları için
-casadi  # MPC'nin altındaki optimizasyon kütüphanesi
-do-mpc  # MPC framework'ü
-matplotlib
-scipy
