@@ -64,7 +64,7 @@ class RotaryKilnDigitalTwin:
              self.emp_weight * (target_temp - self.temp)
         
         self.temp += self.thermal_mass * dT
-        self.temp = np.clip(self.temp, 800, 1600)
+        self.temp = np.clip(self.temp, 400, 1600)
         eff = self.calculate_efficiency(self.temp, self.o2)
         
         self.data.append({
