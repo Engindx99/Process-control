@@ -85,7 +85,7 @@ class RotaryKilnDigitalTwin:
 
     def run_full_simulation(self, steps=5000, csv_file="firin_dataset_5k.csv", pkl_file="firin_model.pkl"):
         """5000 adımlık veri üretir ve tüm dosyaları kaydeder."""
-        print(f"🔄 Simülasyon başladı: {steps} adım...")
+        print(f" Simülasyon başladı: {steps} adım...")
         
         # Dinamik Girdi Üretimi (Random Walk)
         f_val, v_val = 16.0, 1000.0
@@ -105,9 +105,9 @@ class RotaryKilnDigitalTwin:
             pickle.dump(self, f)
             
         print("-" * 30)
-        print(f"✅ BAŞARILI: {len(df)} satır veri üretildi.")
-        print(f"📂 CSV Dosyası: {os.path.abspath(csv_file)}")
-        print(f"📂 Model Dosyası: {os.path.abspath(pkl_file)}")
+        print(f" BAŞARILI: {len(df)} satır veri üretildi.")
+        print(f" CSV Dosyası: {os.path.abspath(csv_file)}")
+        print(f" Model Dosyası: {os.path.abspath(pkl_file)}")
         print("-" * 30)
 
 # --- ÇALIŞTIR ---
