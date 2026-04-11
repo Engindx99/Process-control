@@ -1,13 +1,10 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 from dt import RotaryKilnDigitalTwin
-
-df = pd.read_csv("firin_dataset_5k.csv")
-
 import matplotlib.pyplot as plt
 import pandas as pd
 
-df = pd.read_csv("firin_dataset_5k.csv")
+df = pd.read_csv("kiln_dataset.csv")
 
 fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
 
