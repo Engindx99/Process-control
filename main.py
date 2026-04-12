@@ -1,158 +1,104 @@
-"""
-Ana Simülasyon Dosyası
-MPC ile Döner Fırın Kontrolü - Sabit Setpoint: 1450°C
-"""
-
+import os
+import json
+import numpy as np
+import matplotlib.pyplot as plt
 from digital_twin.dt import RotaryKilnDigitalTwin
 from mpc.mpc import MPC
-import matplotlib.pyplot as plt
-import numpy as np
-import json
-
 
 def run_simulation():
-    """Simülasyonu çalıştır - Sabit setpoint 1450°C"""
-    
+    """Simülasyonu çalıştır ve verileri kaydet"""
     print("=" * 70)
-    print("MPC CONTROLLER - Döner Fırın Simülasyonu")
-    print(f"SABİT SETPOINT: 1450°C")
+    print("MPC CONTROLLER - Yeni Simülasyon Başlatılıyor")
     print("=" * 70)
     
-    # Başlat
     plant = RotaryKilnDigitalTwin()
-    mpc = MPC(horizon=10, n_candidates=20)
-    
-    steps = 2000
-    
-    print("\nSimülasyon çalışıyor...")
-    print("-" * 70)
+    mpc = MPC(horizon=20) # Gecikme için optimize edilmiş değerler
+    steps = 5000
     
     for i in range(steps):
+        # 🌪️ Bozucu etkiler (Disturbances)
+        plant.temp += np.random.normal(0, 1.0)
         
-        # 🌪️ BOZUCU ETKİLER
-        disturbance = np.random.normal(0, 1.0)
-        plant.temp += disturbance
+        # Senaryo bazlı ani değişimler (Test senaryoları)
+        if 500 < i < 550: plant.temp += 3
+        if 1200 < i < 1250: plant.temp -= 2
+        if 1600 < i < 1650: plant.temp += 2.5
         
-        # Ani bozucu etkiler
-        if 500 < i < 550:
-            plant.temp += 3  # Isı kaybı
-        if 1200 < i < 1250:
-            plant.temp -= 2  # Aşırı ısınma
-        if 1600 < i < 1650:
-            plant.temp += 2.5  # Hammadde nem değişimi
+        # 🎯 MPC Optimizasyonu
+        fuel = mpc.optimize(plant)
         
-        # 🎯 MPC optimizasyonu (SADECE plant - setpoint YOK!)
-        fuel = mpc.optimize(plant)  # ✅ DÜZELTİLDİ
-        
-        # 🏭 Proses adımı
+        # 🏭 Proses Adımı
         temp, o2, _ = plant.step(fuel, 1000.0)
         
-        # 📝 Loglama (setpoint otomatik eklenir)
+        # 📝 Loglama
         mpc.log_step(i, fuel, temp, o2)
         
-        # 📊 Durum gösterimi (her 200 adımda bir)
         if i % 200 == 0:
             error = temp - mpc.setpoint
-            print(f"Step {i:4d}: T={temp:6.1f}°C | SP={mpc.setpoint}°C | Error={error:+5.1f}°C | Fuel={fuel:5.2f}")
+            print(f"Step {i:4d}: T={temp:6.1f}°C | Error={error:+5.1f}°C | Fuel={fuel:5.2f}")
     
-    print("-" * 70)
-    print("Simülasyon tamamlandı!")
     mpc.save("mpc_log.json")
-    print("Log kaydedildi: mpc_log.json")
-    
+    print("\n✅ Simülasyon tamamlandı ve kaydedildi.")
     return mpc.log
 
-
 def plot_results(data):
-    """Grafikleri çiz"""
-    
-    steps = [d["step"] for d in data]
-    temps = [d["temp"] for d in data]
-    sps = [d["setpoint"] for d in data]
-    fuels = [d["fuel"] for d in data]
-    o2s = [d["o2"] for d in data]
-    
-    setpoint_value = sps[0] if sps else 1450
-    
-    # Style
-    plt.style.use('seaborn-v0_8-darkgrid')
-    
-    # GRAFİK 1: Sıcaklık Takibi
-    plt.figure(figsize=(14, 6))
-    plt.plot(steps, temps, 'b-', label='Process Temperature', linewidth=1.5, alpha=0.8)
-    plt.axhline(y=setpoint_value, color='r', linestyle='--', 
-                label=f'Setpoint = {setpoint_value}°C', linewidth=2)
-    plt.fill_between(steps, setpoint_value-2, setpoint_value+2, 
-                      color='red', alpha=0.1, label='±2°C Band')
-    plt.xlabel('Time Step', fontsize=12)
-    plt.ylabel('Temperature (°C)', fontsize=12)
-    plt.title(f'Dynamic MPC Tracking - Setpoint: {setpoint_value}°C', fontsize=14, fontweight='bold')
-    plt.legend(loc='best', fontsize=10)
-    plt.grid(True, alpha=0.3)
-    plt.ylim(1430, 1480)
-    plt.tight_layout()
-    plt.show()
-    
-    # GRAFİK 2: Yakıt Kontrol Sinyali
-    plt.figure(figsize=(14, 4))
-    plt.plot(steps, fuels, 'g-', linewidth=1.5)
-    plt.xlabel('Time Step', fontsize=12)
-    plt.ylabel('Fuel Flow Rate', fontsize=12)
-    plt.title('MPC Control Signal (Adaptive Fuel)', fontsize=14, fontweight='bold')
-    plt.grid(True, alpha=0.3)
-    plt.ylim(12, 22)
-    plt.tight_layout()
-    plt.show()
-    
-    # GRAFİK 3: Takip Hatası
-    plt.figure(figsize=(14, 4))
-    error = np.array(temps) - setpoint_value
-    plt.plot(steps, error, 'purple', linewidth=1)
-    plt.axhline(y=0, color='red', linestyle='--', alpha=0.5, label='Zero Error')
-    plt.axhline(y=2, color='gray', linestyle=':', alpha=0.5)
-    plt.axhline(y=-2, color='gray', linestyle=':', alpha=0.5)
-    plt.fill_between(steps, -2, 2, alpha=0.1, color='green', label='Acceptable Band (±2°C)')
-    plt.xlabel('Time Step', fontsize=12)
-    plt.ylabel('Error (°C)', fontsize=12)
-    plt.title('Tracking Error - MPC Performance', fontsize=14, fontweight='bold')
-    plt.legend(loc='best', fontsize=10)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-    
-    # GRAFİK 4: Oksijen Seviyesi
-    plt.figure(figsize=(14, 4))
-    plt.plot(steps, o2s, 'orange', linewidth=1.5)
-    plt.xlabel('Time Step', fontsize=12)
-    plt.ylabel('Oxygen Level (%)', fontsize=12)
-    plt.title('Oxygen Level Monitoring', fontsize=14, fontweight='bold')
-    plt.grid(True, alpha=0.3)
-    plt.ylim(1, 4)
-    plt.tight_layout()
-    plt.show()
-    
-    # PERFORMANS METRİKLERİ
-    print("\n" + "=" * 70)
-    print(f"PERFORMANS ÖZETİ - Setpoint: {setpoint_value}°C")
-    print("=" * 70)
-    print(f"📊 Ortalama Mutlak Hata (MAE):     {np.mean(np.abs(error)):.2f}°C")
-    print(f"📈 Maksimum Mutlak Hata:           {np.max(np.abs(error)):.2f}°C")
-    print(f"📉 Root Mean Square Error (RMSE):  {np.sqrt(np.mean(error**2)):.2f}°C")
-    print(f"🎯 Standart Sapma:                 {np.std(error):.2f}°C")
-    print(f"⛽ Yakıt Aralığı:                  [{min(fuels):.2f}, {max(fuels):.2f}]")
-    print(f"🔥 Ortalama Yakıt Tüketimi:        {np.mean(fuels):.2f}")
-    print(f"💨 Oksijen Aralığı:                [{min(o2s):.2f}, {max(o2s):.2f}]%")
-    print("=" * 70)
+    import pandas as pd
+    import matplotlib.pyplot as plt
 
+    df = pd.DataFrame(data)
+    
+    # Gürültüyü temizlemek için hareketli ortalama
+    df['temp_smooth'] = df['temp'].rolling(window=15, min_periods=1).mean()
+    df['fuel_smooth'] = df['fuel'].rolling(window=10, min_periods=1).mean()
 
-# =========================================================
-# ANA PROGRAM
-# =========================================================
+    # --- GENEL ANALİZ GRAFİĞİ ---
+    plt.style.use('default') 
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+    fig.patch.set_facecolor('white')
+
+    # Sıcaklık (Üst)
+    ax1.plot(df['step'], df['temp'], color='red', alpha=0.15, linewidth=0.5)
+    ax1.plot(df['step'], df['temp_smooth'], color='red', linewidth=1.8, label='Fırın Sıcaklığı (°C)')
+    ax1.axhline(y=1450, color='black', linestyle='--', linewidth=1.2, label='Setpoint (1450°C)')
+    ax1.set_title("Döner Fırın Termal Analizi", fontsize=14, fontweight='bold', color='black')
+    ax1.set_ylabel("Sıcaklık (°C)", color='black')
+    ax1.set_ylim(1440, 1465)
+    ax1.legend(loc='upper right')
+    ax1.grid(True, linestyle=':', alpha=0.6)
+
+    # Yakıt (Alt)
+    ax2.plot(df['step'], df['fuel_smooth'], color='blue', linewidth=0.5, label='Yakıt Debisi (m³/h)')
+    ax2.set_title("MPC Yakıt Kontrol Sinyali", fontsize=13, fontweight='bold', color='black')
+    ax2.set_ylabel("Yakıt Miktarı", color='black')
+    ax2.set_xlabel("Zaman Adımı (Step)", color='black')
+    ax2.legend(loc='upper right')
+    ax2.grid(True, linestyle=':', alpha=0.6)
+
+    plt.tight_layout()
+    plt.show()
+
+    # --- ZOOM GRAFİĞİ (İLK 300 ADIM) ---
+    plt.figure(figsize=(14, 5), facecolor='white')
+    # Sıcaklık çizgisi kırmızı, eşik değeri kırmızı kesikli
+    plt.plot(df['step'][:300], df['temp'][:300], color='darkgoldenrod', linewidth=1.5, label='Sıcaklık (Yakın Çekim)')
+    plt.axhline(y=1450, color='red', linestyle='--', linewidth=2, label='Setpoint (1450°C)')
+    
+    plt.title("Sistemin Başlangıç Tepkisi (İlk 300 Adım)", fontsize=12, fontweight='bold', color='black')
+    plt.xlabel("Zaman Adımı", color='black')
+    plt.ylabel("Sıcaklık (°C)", color='black')
+    plt.ylim(1435, 1465)
+    plt.grid(True, linestyle='--', alpha=0.3)
+    plt.legend(loc='lower right')
+    plt.show()
+
 if __name__ == "__main__":
-    # Simülasyonu çalıştır
-    log_data = run_simulation()
+    log_file = "mpc_log.json"
     
-    # Grafikleri çiz
+    if os.path.exists(log_file):
+        print(f"\n📂 {log_file} bulundu. Mevcut veriler yükleniyor...")
+        with open(log_file, "r") as f:
+            log_data = json.load(f)
+    else:
+        log_data = run_simulation()
+    
     plot_results(log_data)
-    
-    print("\n✅ Tüm işlemler tamamlandı!")

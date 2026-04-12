@@ -1,57 +1,50 @@
-"""
-MPC Controller Sınıfı - Sabit Setpoint 1450°C
-"""
-
 import numpy as np
 import json
-from digital_twin.dt import RotaryKilnDigitalTwin
-
+from scipy.optimize import minimize_scalar
 
 class MPC:
-    """Model Predictive Control - Sabit Setpoint: 1450°C"""
-    
-    def __init__(self, horizon=10, n_candidates=12):
+    def __init__(self, horizon=20):
         self.horizon = horizon
-        self.n_candidates = n_candidates
-        self.lambda_u = 0.6  # Yakıt değişim cezası
-        self.setpoint = 1450  # 📌 SABİT SETPOINT
+        self.lambda_u = 15.0  # Hareket maliyeti
+        self.setpoint = 1450
+        # Yakıtın sadece 0.02'den büyük değişimlerini "gerçek değişim" say
+        self.deadband = 0.02 
         self.log = []
 
-    def cost(self, temps, fuels):
-        """Maliyet fonksiyonu - sabit setpoint kullanır"""
-        error = np.array(temps) - self.setpoint
-        du = np.diff(fuels, prepend=fuels[0])
-        return np.sum(error**2) + self.lambda_u * np.sum(du**2)
+    def _objective(self, f, plant):
+        """Maliyet fonksiyonu: Simülasyon sonundaki hata karesi + değişim cezası"""
+        sim = self._clone(plant)
+        temps = []
+        for _ in range(self.horizon):
+            temp, _, _ = sim.step(f, 1000.0)
+            temps.append(temp)
+        
+        mse = np.mean((np.array(temps) - self.setpoint)**2)
+        # Mevcut yakıttan uzaklaşma cezası (stabilite sağlar)
+        smoothness = self.lambda_u * (f - plant.fuel)**2
+        return mse + smoothness
 
     def optimize(self, plant):
-        """Optimum yakıt debisini bul - setpoint parametresi gerekmez"""
-        best_fuel = plant.fuel
-        best_cost = float("inf")
+        # Aday listesi kullanmak yerine matematiksel minimumu buluyoruz
+        # Bu sayede 17.39 veya 17.56 yerine 17.4234 gibi tam gereken değeri bulur.
+        res = minimize_scalar(
+            self._objective, 
+            args=(plant,), 
+            bounds=(12.0, 22.0), 
+            method='bounded'
+        )
         
-        fuel_grid = np.linspace(12.0, 22.0, self.n_candidates)
-
-        for f in fuel_grid:
-            sim = self._clone(plant)
-            temps = []
-            fuels = []
-
-            for _ in range(self.horizon):
-                # Model belirsizliği
-                sim.temp += np.random.normal(0, 0.3)
-                temp, o2, _ = sim.step(f, 1000.0)
-                temps.append(temp)
-                fuels.append(f)
-
-            c = self.cost(temps, fuels)
-
-            if c < best_cost:
-                best_cost = c
-                best_fuel = f
-
-        return best_fuel
+        new_fuel = res.x
+        
+        # --- Ölü Bant (Deadband) Mantığı ---
+        # Eğer yeni bulunan değer, eskisine çok yakınsa boşuna vanayı oynatma.
+        if abs(new_fuel - plant.fuel) < self.deadband:
+            return plant.fuel
+            
+        return new_fuel
 
     def _clone(self, plant):
-        """Plant kopyala"""
+        from digital_twin.dt import RotaryKilnDigitalTwin
         sim = RotaryKilnDigitalTwin()
         sim.temp = plant.temp
         sim.o2 = plant.o2
@@ -61,21 +54,16 @@ class MPC:
         return sim
 
     def log_step(self, step, fuel, temp, o2):
-        """Adımı logla - setpoint otomatik eklenir"""
+        # Sadece sayısal değişim varsa logla diyebilirsin ama 
+        # grafik sürekliliği için her adımı yazmak daha iyidir.
         self.log.append({
-            "step": step,
+            "step": int(step),
             "fuel": float(fuel),
             "temp": float(temp),
             "o2": float(o2),
-            "setpoint": float(self.setpoint)  # Sabit setpoint
+            "setpoint": float(self.setpoint)
         })
 
     def save(self, path="mpc_log.json"):
-        """Log'u kaydet"""
         with open(path, "w") as f:
             json.dump(self.log, f, indent=2)
-    
-    def load(self, path="mpc_log.json"):
-        """Log'u yükle"""
-        with open(path, "r") as f:
-            self.log = json.load(f)
