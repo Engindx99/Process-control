@@ -1,12 +1,11 @@
 import numpy as np
 import pandas as pd
 import pickle
-import os
 
 
 class RotaryKilnDigitalTwin:
     def __init__(self):
-        # state
+        # ---------------- STATE ----------------
         self.temp = 1400.0
         self.o2 = 4.0
         self.fuel = 16.0
@@ -17,9 +16,9 @@ class RotaryKilnDigitalTwin:
         self.data = []
         self.fuel_history = [self.fuel] * 12
 
-        # physics params
-        self.thermal_mass = 0.10
-        self.heat_gain_factor = 34.0 
+        # ---------------- PHYSICS PARAMETERS ----------------
+        self.thermal_mass = 0.35
+        self.heat_gain_factor = 20.0
 
         self.conv_factor = 0.00025
         self.rad_factor = 5.67e-12
@@ -27,7 +26,7 @@ class RotaryKilnDigitalTwin:
         self.area_scale = 7.0
 
         self.phys_weight = 0.95
-        self.emp_weight = 0.05
+        self.emp_weight = 0.01
 
     # ---------------- O2 MODEL ----------------
     def calculate_o2(self, fuel, fan):
@@ -39,88 +38,82 @@ class RotaryKilnDigitalTwin:
 
     # ---------------- COMBUSTION ----------------
     def combustion_eff(self, o2):
-        # geniş ve güvenli verim
         return 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.0) / 1.8) ** 2)
 
     # ---------------- STEP ----------------
     def step(self, fuel, fan):
+
+        # ---------------- INPUT LIMITS ----------------
         self.fuel = np.clip(fuel, 12.0, 22.0)
         self.fan = np.clip(fan, 950.0, 1100.0)
 
-        # delay
+        # ---------------- DELAY ----------------
         self.fuel_history.append(self.fuel)
         delayed_fuel = self.fuel_history.pop(0)
 
-        # O2 dynamics
+        # ---------------- O2 DYNAMICS ----------------
         target_o2 = self.calculate_o2(self.fuel, self.fan)
         self.o2 += 0.18 * (target_o2 - self.o2)
 
-        # temperatures
+        # ---------------- TEMPERATURE STATE ----------------
         T_k = self.temp + 273.15
         T_env_k = self.T_env + 273.15
 
-        # ---------------- COMBUSTION PHYSICS ----------------
+        # ---------------- COMBUSTION ----------------
         base_eff = self.combustion_eff(self.o2)
 
-        # 🔥 NEW: Air-Fuel Ratio etkisi
         air_fuel_ratio = self.fan / (self.fuel + 1e-6)
         afr_eff = np.exp(-0.5 * ((air_fuel_ratio - 65) / 20) ** 2)
 
-        comb_eff = base_eff * (0.7 + 0.3 * afr_eff)
+        comb_eff = base_eff * (0.9 + 0.1 * afr_eff)
 
-        # 🔥 heat gain
         heat_gain = delayed_fuel * self.heat_gain_factor * comb_eff
-
-        # base load (kiln hiçbir zaman tamamen sönmez)
-        heat_gain += 49
-
+        heat_gain += 60.0
         heat_gain = np.clip(heat_gain, 0, 1000)
 
         # ---------------- LOSSES ----------------
         # convection
         heat_loss_conv = (0.005 + self.conv_factor * self.fan) * (self.temp - self.T_env)
 
-        # 🔥 Excess O2 cooling
+        # excess oxygen cooling
         excess_o2 = max(0.0, self.o2 - 3.0)
-        extra_cooling = excess_o2 * 0.0035 * (self.temp - self.T_env)
+        temp_factor = 0.3 + 0.7 * np.tanh(self.temp / 1200.0)
 
-        heat_loss_conv += extra_cooling
+        heat_loss_conv += excess_o2 * 0.0015 * temp_factor * (self.temp - self.T_env)
 
-        # radiation (biraz yumuşatıldı)
+        # radiation
         heat_loss_rad = (
             self.emissivity *
             self.rad_factor *
             self.area_scale *
             (T_k**4 - T_env_k**4)
-        ) / 140.0
+        ) / 5e8
 
         # ---------------- ENERGY BALANCE ----------------
         net_heat = heat_gain - heat_loss_conv - heat_loss_rad
+        net_heat = np.clip(net_heat, -300, 300)
 
-        if self.temp > 1490:
-            heat_loss_rad *= 1.15
-
-        # stabilizasyon
-        net_heat = np.tanh(net_heat / 600.0) * 600.0
-
-        # soft target (çok zayıf)
+        # ---------------- SOFT PHYSICS CORRECTION ----------------
         target_temp = 1450 * np.exp(-0.5 * ((self.o2 - 3.0) / 1.2) ** 2)
 
-        dT = self.phys_weight * net_heat + self.emp_weight * (target_temp - self.temp)
+        dT = (
+            self.phys_weight * net_heat +
+            self.emp_weight * (target_temp - self.temp)
+        )
 
         self.temp += self.thermal_mass * dT
 
         # safety
-        self.temp = np.clip(self.temp, 500, 1550)
+        self.temp = np.clip(self.temp, 0, 5000)
 
-        # efficiency output
+        # ---------------- OUTPUT ----------------
         eff = np.clip(
             (1.05 - 0.00006 * self.temp) *
             np.exp(-0.5 * ((self.o2 - 3.0) / 1.2) ** 2),
             0.4, 0.98
         )
 
-        # log
+        # ---------------- LOG ----------------
         self.data.append({
             "adim": self.step_count,
             "fuel": float(self.fuel),
