@@ -19,9 +19,9 @@ class RotaryKilnDigitalTwin:
 
         # physics params
         self.thermal_mass = 0.10
-        self.heat_gain_factor = 24.0
+        self.heat_gain_factor = 38.0   # 🔥 artırıldı
 
-        self.conv_factor = 0.00015
+        self.conv_factor = 0.00025
         self.rad_factor = 5.67e-12
         self.emissivity = 0.85
         self.area_scale = 7.0
@@ -39,17 +39,19 @@ class RotaryKilnDigitalTwin:
 
     # ---------------- COMBUSTION ----------------
     def combustion_eff(self, o2):
-        return np.exp(-0.5 * ((o2 - 3.9) / 1.2) ** 2)
+        # geniş ve güvenli verim
+        return 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.0) / 1.8) ** 2)
 
     # ---------------- STEP ----------------
     def step(self, fuel, fan):
         self.fuel = np.clip(fuel, 12.0, 22.0)
         self.fan = np.clip(fan, 950.0, 1100.0)
 
+        # delay
         self.fuel_history.append(self.fuel)
         delayed_fuel = self.fuel_history.pop(0)
 
-        # O2 update
+        # O2 dynamics
         target_o2 = self.calculate_o2(self.fuel, self.fan)
         self.o2 += 0.18 * (target_o2 - self.o2)
 
@@ -57,41 +59,61 @@ class RotaryKilnDigitalTwin:
         T_k = self.temp + 273.15
         T_env_k = self.T_env + 273.15
 
-        # combustion
-        comb_eff = self.combustion_eff(self.o2)
+        # ---------------- COMBUSTION PHYSICS ----------------
+        base_eff = self.combustion_eff(self.o2)
 
-        # heat gain (SAFE CLIPPED)
+        # 🔥 NEW: Air-Fuel Ratio etkisi
+        air_fuel_ratio = self.fan / (self.fuel + 1e-6)
+        afr_eff = np.exp(-0.5 * ((air_fuel_ratio - 65) / 20) ** 2)
+
+        comb_eff = base_eff * (0.7 + 0.3 * afr_eff)
+
+        # 🔥 heat gain
         heat_gain = delayed_fuel * self.heat_gain_factor * comb_eff
-        heat_gain = np.clip(heat_gain, 0, 600)
 
-        # losses
+        # base load (kiln hiçbir zaman tamamen sönmez)
+        heat_gain += 80
+
+        heat_gain = np.clip(heat_gain, 0, 1000)
+
+        # ---------------- LOSSES ----------------
+        # convection
         heat_loss_conv = (0.005 + self.conv_factor * self.fan) * (self.temp - self.T_env)
 
+        # 🔥 Excess O2 cooling
+        excess_o2 = max(0.0, self.o2 - 3.0)
+        extra_cooling = excess_o2 * 0.002 * (self.temp - self.T_env)
+
+        heat_loss_conv += extra_cooling
+
+        # radiation (biraz yumuşatıldı)
         heat_loss_rad = (
             self.emissivity *
             self.rad_factor *
             self.area_scale *
             (T_k**4 - T_env_k**4)
-        ) / 90.0
+        ) / 140.0
 
-        # ---------------- CRITICAL FIX ----------------
+        # ---------------- ENERGY BALANCE ----------------
         net_heat = heat_gain - heat_loss_conv - heat_loss_rad
-        net_heat = np.tanh(net_heat / 400.0) * 400.0
 
-        # target soft behavior (weak)
-        target_temp = 1420 * np.exp(-0.5 * ((self.o2 - 3.9) / 1.2) ** 2)
+        # stabilizasyon
+        net_heat = np.tanh(net_heat / 600.0) * 600.0
+
+        # soft target (çok zayıf)
+        target_temp = 1450 * np.exp(-0.5 * ((self.o2 - 3.0) / 1.2) ** 2)
 
         dT = self.phys_weight * net_heat + self.emp_weight * (target_temp - self.temp)
 
         self.temp += self.thermal_mass * dT
 
-        # safety bounds
-        self.temp = np.clip(self.temp, 460, 1550)
+        # safety
+        self.temp = np.clip(self.temp, 500, 1550)
 
-        # efficiency
+        # efficiency output
         eff = np.clip(
             (1.05 - 0.00006 * self.temp) *
-            np.exp(-0.5 * ((self.o2 - 3.9) / 1.2) ** 2),
+            np.exp(-0.5 * ((self.o2 - 3.0) / 1.2) ** 2),
             0.4, 0.98
         )
 

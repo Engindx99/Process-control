@@ -13,7 +13,7 @@ axes[0].plot(df["adim"], df["sicaklik"], color="red", linewidth=0.8)
 axes[0].set_ylim(0, 1600)
 axes[0].set_ylabel("Sıcaklık (°C)")
 axes[0].grid(True, alpha=0.3)
-axes[0].set_title("Döner Fırın Dijital İkiz Çıktıları")
+axes[0].set_title("Rotary Klin Burning Zone Twin ")
 
 # O2
 axes[1].plot(df["adim"], df["o2"], color="blue", linewidth=0.8)
