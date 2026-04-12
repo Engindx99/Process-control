@@ -19,7 +19,7 @@ class RotaryKilnDigitalTwin:
 
         # physics params
         self.thermal_mass = 0.10
-        self.heat_gain_factor = 38.0   # 🔥 artırıldı
+        self.heat_gain_factor = 34.0 
 
         self.conv_factor = 0.00025
         self.rad_factor = 5.67e-12
@@ -72,7 +72,7 @@ class RotaryKilnDigitalTwin:
         heat_gain = delayed_fuel * self.heat_gain_factor * comb_eff
 
         # base load (kiln hiçbir zaman tamamen sönmez)
-        heat_gain += 80
+        heat_gain += 49
 
         heat_gain = np.clip(heat_gain, 0, 1000)
 
@@ -82,7 +82,7 @@ class RotaryKilnDigitalTwin:
 
         # 🔥 Excess O2 cooling
         excess_o2 = max(0.0, self.o2 - 3.0)
-        extra_cooling = excess_o2 * 0.002 * (self.temp - self.T_env)
+        extra_cooling = excess_o2 * 0.0035 * (self.temp - self.T_env)
 
         heat_loss_conv += extra_cooling
 
@@ -96,6 +96,9 @@ class RotaryKilnDigitalTwin:
 
         # ---------------- ENERGY BALANCE ----------------
         net_heat = heat_gain - heat_loss_conv - heat_loss_rad
+
+        if self.temp > 1490:
+            heat_loss_rad *= 1.15
 
         # stabilizasyon
         net_heat = np.tanh(net_heat / 600.0) * 600.0
