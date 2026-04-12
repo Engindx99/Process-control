@@ -57,17 +57,17 @@ def plot_results(data):
     fig.patch.set_facecolor('white')
 
     # Sıcaklık (Üst)
-    ax1.plot(df['step'], df['temp'], color='red', alpha=0.15, linewidth=0.5)
-    ax1.plot(df['step'], df['temp_smooth'], color='red', linewidth=1.8, label='Fırın Sıcaklığı (°C)')
+    ax1.plot(df['step'], df['temp'], color='red', alpha=0.25, linewidth=0.5)
+    ax1.plot(df['step'], df['temp_smooth'], color='red', linewidth=1, label='Fırın Sıcaklığı (°C)')
     ax1.axhline(y=1450, color='black', linestyle='--', linewidth=1.2, label='Setpoint (1450°C)')
     ax1.set_title("Döner Fırın Termal Analizi", fontsize=14, fontweight='bold', color='black')
     ax1.set_ylabel("Sıcaklık (°C)", color='black')
-    ax1.set_ylim(1440, 1465)
+    ax1.set_ylim(1300, 1500)
     ax1.legend(loc='upper right')
     ax1.grid(True, linestyle=':', alpha=0.6)
 
     # Yakıt (Alt)
-    ax2.plot(df['step'], df['fuel_smooth'], color='blue', linewidth=0.5, label='Yakıt Debisi (m³/h)')
+    ax2.plot(df['step'], df['fuel_smooth'], color='blue', linewidth=1, label='Yakıt Debisi (m³/h)')
     ax2.set_title("MPC Yakıt Kontrol Sinyali", fontsize=13, fontweight='bold', color='black')
     ax2.set_ylabel("Yakıt Miktarı", color='black')
     ax2.set_xlabel("Zaman Adımı (Step)", color='black')
@@ -75,20 +75,6 @@ def plot_results(data):
     ax2.grid(True, linestyle=':', alpha=0.6)
 
     plt.tight_layout()
-    plt.show()
-
-    # --- ZOOM GRAFİĞİ (İLK 300 ADIM) ---
-    plt.figure(figsize=(14, 5), facecolor='white')
-    # Sıcaklık çizgisi kırmızı, eşik değeri kırmızı kesikli
-    plt.plot(df['step'][:300], df['temp'][:300], color='darkgoldenrod', linewidth=1.5, label='Sıcaklık (Yakın Çekim)')
-    plt.axhline(y=1450, color='red', linestyle='--', linewidth=2, label='Setpoint (1450°C)')
-    
-    plt.title("Sistemin Başlangıç Tepkisi (İlk 300 Adım)", fontsize=12, fontweight='bold', color='black')
-    plt.xlabel("Zaman Adımı", color='black')
-    plt.ylabel("Sıcaklık (°C)", color='black')
-    plt.ylim(1435, 1465)
-    plt.grid(True, linestyle='--', alpha=0.3)
-    plt.legend(loc='lower right')
     plt.show()
 
 if __name__ == "__main__":

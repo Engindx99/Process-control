@@ -4,29 +4,38 @@ from scipy.optimize import minimize_scalar
 
 class MPC:
     def __init__(self, horizon=20):
+        """
+        Gelişmiş MPC Kontrolcüsü
+        :param horizon: Geleceğe yönelik tahmin adımı (Gecikme toleransı için 20 idealdir)
+        """
         self.horizon = horizon
-        self.lambda_u = 15.0  # Hareket maliyeti
         self.setpoint = 1450
-        # Yakıtın sadece 0.02'den büyük değişimlerini "gerçek değişim" say
-        self.deadband = 0.02 
+        
+        # PARAMETRE AYARLARI (Sakinleştirilmiş Kontrol)
+        self.lambda_u = 80.0    # Yakıt değişim cezası (Yüksek değer = Daha düz mavi hat)
+        self.deadband = 0.08    # Ölü bant (Bu değerden küçük değişimler yok sayılır)
+        
         self.log = []
 
     def _objective(self, f, plant):
-        """Maliyet fonksiyonu: Simülasyon sonundaki hata karesi + değişim cezası"""
+        """Maliyet fonksiyonu: Sıcaklık hatası + Yakıt değişim maliyeti"""
         sim = self._clone(plant)
         temps = []
+        
+        # Belirlenen ufuk (horizon) boyunca simülasyon yap
         for _ in range(self.horizon):
             temp, _, _ = sim.step(f, 1000.0)
             temps.append(temp)
         
+        # 1. Sıcaklık hatasının karesi (MSE)
         mse = np.mean((np.array(temps) - self.setpoint)**2)
-        # Mevcut yakıttan uzaklaşma cezası (stabilite sağlar)
+        
+        # 2. Yakıt değişiminin maliyeti (Düzgünleştirme etkisi)
         smoothness = self.lambda_u * (f - plant.fuel)**2
+        
         return mse + smoothness
 
     def optimize(self, plant):
-        # Aday listesi kullanmak yerine matematiksel minimumu buluyoruz
-        # Bu sayede 17.39 veya 17.56 yerine 17.4234 gibi tam gereken değeri bulur.
         res = minimize_scalar(
             self._objective, 
             args=(plant,), 
@@ -34,16 +43,29 @@ class MPC:
             method='bounded'
         )
         
-        new_fuel = res.x
+        target_fuel = res.x
         
-        # --- Ölü Bant (Deadband) Mantığı ---
-        # Eğer yeni bulunan değer, eskisine çok yakınsa boşuna vanayı oynatma.
-        if abs(new_fuel - plant.fuel) < self.deadband:
-            return plant.fuel
+        # --- FİZİKSEL KISIT: Slew Rate (Hız Limiti) ---
+        # Yakıtın bir adımda en fazla 0.05 birim değişebileceğini varsayalım
+        max_step_change = 0.05 
+        current_fuel = plant.fuel
+        
+        diff = target_fuel - current_fuel
+        
+        if abs(diff) > max_step_change:
+            # Eğer değişim çok büyükse, vana sadece kapasitesi kadar döner
+            actual_fuel = current_fuel + np.sign(diff) * max_step_change
+        else:
+            actual_fuel = target_fuel
             
-        return new_fuel
+        # --- Histerezis (Yine de Deadband'i koruyalım) ---
+        if abs(actual_fuel - current_fuel) < 0.01:
+            return current_fuel
+            
+        return actual_fuel
 
     def _clone(self, plant):
+        """Digital Twin'in o anki durumunu (ve geçmişini) kopyalar"""
         from digital_twin.dt import RotaryKilnDigitalTwin
         sim = RotaryKilnDigitalTwin()
         sim.temp = plant.temp
@@ -54,8 +76,7 @@ class MPC:
         return sim
 
     def log_step(self, step, fuel, temp, o2):
-        # Sadece sayısal değişim varsa logla diyebilirsin ama 
-        # grafik sürekliliği için her adımı yazmak daha iyidir.
+        """Her adımın sonucunu hafızaya kaydeder"""
         self.log.append({
             "step": int(step),
             "fuel": float(fuel),
@@ -65,5 +86,11 @@ class MPC:
         })
 
     def save(self, path="mpc_log.json"):
+        """Log verilerini JSON dosyasına yazar"""
         with open(path, "w") as f:
             json.dump(self.log, f, indent=2)
+
+    def load(self, path="mpc_log.json"):
+        """Eski log verilerini yükler"""
+        with open(path, "r") as f:
+            self.log = json.load(f)
