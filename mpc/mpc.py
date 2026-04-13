@@ -1,82 +1,97 @@
 import numpy as np
 import json
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize
 
 class MPC:
-    def __init__(self, horizon=20):
+    def __init__(self, prediction_horizon=30, control_horizon=3):
         """
-        Gelişmiş MPC Kontrolcüsü
-        :param horizon: Geleceğe yönelik tahmin adımı (Gecikme toleransı için 20 idealdir)
+        Gelişmiş Vektörel MPC Kontrolcüsü
+        :param prediction_horizon (P): Sistemin gelecekteki tepkisini izleme süresi
+        :param control_horizon (M): Kaç adım sonrasına kadar karar alınacağı
         """
-        self.horizon = horizon
+        self.P = prediction_horizon
+        self.M = control_horizon
         self.setpoint = 1450
         
-        # PARAMETRE AYARLARI (Sakinleştirilmiş Kontrol)
-        self.lambda_u = 80.0    # Yakıt değişim cezası (Yüksek değer = Daha düz mavi hat)
-        self.deadband = 0.08    # Ölü bant (Bu değerden küçük değişimler yok sayılır)
+        # PARAMETRE AYARLARI
+        self.lambda_u = 120.0   # Yakıt değişim cezası (Vektörel yapıda biraz daha yüksek tutulabilir)
+        self.max_step_change = 0.05 # Slew rate limiti
         
         self.log = []
 
-    def _objective(self, f, plant):
-        """Maliyet fonksiyonu: Sıcaklık hatası + Yakıt değişim maliyeti"""
+    def _objective(self, fuel_sequence, plant):
+        """Maliyet fonksiyonu: Sıcaklık hatası + Kontrol çabası"""
         sim = self._clone(plant)
         temps = []
         
-        # Belirlenen ufuk (horizon) boyunca simülasyon yap
-        for _ in range(self.horizon):
-            temp, _, _ = sim.step(f, 1000.0)
+        # Kontrol ufku dışındaki adımlar için son kontrol değerini kullan (Zero-order hold)
+        full_sequence = np.zeros(self.P)
+        full_sequence[:self.M] = fuel_sequence
+        full_sequence[self.M:] = fuel_sequence[-1]
+        
+        # Simülasyonu P adımı boyunca koştur
+        for i in range(self.P):
+            temp, _, _ = sim.step(full_sequence[i], 1000.0)
             temps.append(temp)
         
-        # 1. Sıcaklık hatasının karesi (MSE)
+        # 1. Hataların karesi (Setpoint takibi)
         mse = np.mean((np.array(temps) - self.setpoint)**2)
         
-        # 2. Yakıt değişiminin maliyeti (Düzgünleştirme etkisi)
-        smoothness = self.lambda_u * (f - plant.fuel)**2
+        # 2. Kontrol Çabası (Süreklilik/Düzgünleştirme)
+        # Mevcut yakıtla ilk önerilen yakıt arasındaki ve önerilenlerin kendi arasındaki farkı cezalandır
+        diffs = np.diff(np.insert(fuel_sequence, 0, plant.fuel))
+        smoothness = self.lambda_u * np.sum(diffs**2)
         
         return mse + smoothness
 
     def optimize(self, plant):
-        res = minimize_scalar(
+        # Başlangıç tahmini: Mevcut yakıt değerini M adım boyunca koru
+        initial_guess = np.full(self.M, plant.fuel)
+        
+        # Yakıt sınırları (Constraint)
+        bounds = [(12.0, 22.0) for _ in range(self.M)]
+        
+        # Optimizasyon (SLSQP kısıtlı optimizasyon için uygundur)
+        res = minimize(
             self._objective, 
+            initial_guess, 
             args=(plant,), 
-            bounds=(12.0, 22.0), 
-            method='bounded'
+            bounds=bounds, 
+            method='SLSQP'
         )
         
-        target_fuel = res.x
+        # Sadece ilk adımı seç (Receding Horizon prensibi)
+        target_fuel = res.x[0]
         
         # --- FİZİKSEL KISIT: Slew Rate (Hız Limiti) ---
-        # Yakıtın bir adımda en fazla 0.05 birim değişebileceğini varsayalım
-        max_step_change = 0.05 
         current_fuel = plant.fuel
-        
         diff = target_fuel - current_fuel
         
-        if abs(diff) > max_step_change:
-            # Eğer değişim çok büyükse, vana sadece kapasitesi kadar döner
-            actual_fuel = current_fuel + np.sign(diff) * max_step_change
+        if abs(diff) > self.max_step_change:
+            actual_fuel = current_fuel + np.sign(diff) * self.max_step_change
         else:
             actual_fuel = target_fuel
             
-        # --- Histerezis (Yine de Deadband'i koruyalım) ---
+        # Histerezis / Deadband (0.01 altındaki oynamalar vana ömrü için engellenir)
         if abs(actual_fuel - current_fuel) < 0.01:
             return current_fuel
             
         return actual_fuel
 
     def _clone(self, plant):
-        """Digital Twin'in o anki durumunu (ve geçmişini) kopyalar"""
+        """Digital Twin kopyası oluşturur"""
         from digital_twin.dt import RotaryKilnDigitalTwin
         sim = RotaryKilnDigitalTwin()
+        # Durum transferi
         sim.temp = plant.temp
         sim.o2 = plant.o2
         sim.fuel = plant.fuel
         sim.fan = plant.fan
-        sim.fuel_history = plant.fuel_history.copy()
+        if hasattr(plant, 'fuel_history'):
+            sim.fuel_history = plant.fuel_history.copy()
         return sim
 
     def log_step(self, step, fuel, temp, o2):
-        """Her adımın sonucunu hafızaya kaydeder"""
         self.log.append({
             "step": int(step),
             "fuel": float(fuel),
@@ -86,11 +101,5 @@ class MPC:
         })
 
     def save(self, path="mpc_log.json"):
-        """Log verilerini JSON dosyasına yazar"""
         with open(path, "w") as f:
             json.dump(self.log, f, indent=2)
-
-    def load(self, path="mpc_log.json"):
-        """Eski log verilerini yükler"""
-        with open(path, "r") as f:
-            self.log = json.load(f)

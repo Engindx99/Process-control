@@ -12,7 +12,7 @@ def run_simulation():
     print("=" * 70)
     
     plant = RotaryKilnDigitalTwin()
-    mpc = MPC(horizon=20) # Gecikme için optimize edilmiş değerler
+    mpc = MPC(prediction_horizon=30, control_horizon=3)
     steps = 5000
     
     for i in range(steps):
