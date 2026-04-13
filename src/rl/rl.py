@@ -1,121 +1,208 @@
-import os
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import gymnasium as gym
 from gymnasium import spaces
+
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
-from stable_baselines3.common.utils import set_random_seed
 
-# Mevcut modüllerinden importlar
 from src.digital_twin.dt import RotaryKilnDigitalTwin
 from src.mpc.mpc import MPC
 
-# --- 1. RL ORTAMI (WRAPPER) ---
-class ResidualKilnEnv(gym.Env):
-    def __init__(self):
-        super(ResidualKilnEnv, self).__init__()
-        self.plant = RotaryKilnDigitalTwin()
-        self.mpc = MPC()
-        self.setpoint = 1450.0
-        
-        # RL Aksiyonu: MPC sinyaline yapılacak ince ayar (±0.2 m3/h)
-        self.action_space = spaces.Box(low=-0.2, high=0.2, shape=(1,), dtype=np.float32)
-        
-        # Gözlem: [Hata, Sıcaklık Değişimi, Mevcut O2, MPC Yakıtı]
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
-        self.prev_temp = 1400.0
 
+# =========================
+# ENVIRONMENT
+# =========================
+class ResidualKilnEnv(gym.Env):
+    def __init__(self, cfg):
+        super().__init__()
+
+        self.cfg = cfg
+
+        # Plant + MPC
+        self.plant = RotaryKilnDigitalTwin()
+        self.mpc = MPC(
+            prediction_horizon=cfg['mpc']['prediction_horizon'],
+            control_horizon=cfg['mpc']['control_horizon']
+        )
+
+        self.setpoint = cfg['mpc']['setpoint']
+
+        # =========================
+        # ACTION SPACE (NORMALIZED)
+        # =========================
+        self.action_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(1,),
+            dtype=np.float32
+        )
+
+        # =========================
+        # OBS SPACE
+        # =========================
+        self.observation_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(4,),
+            dtype=np.float32
+        )
+
+        self.prev_temp = 1400.0
+        self.last_action = 0.0
+
+        # RL influence scale
+        self.action_scale = cfg['rl']['action_limit']
+
+        self.step_count = 0
+        self.max_steps = 2000
+
+    # =========================
+    # OBSERVATION NORMALIZATION
+    # =========================
     def _get_obs(self):
         return np.array([
-            self.plant.temp - self.setpoint,
-            self.plant.temp - self.prev_temp,
-            self.plant.o2,
-            self.plant.fuel
+            (self.plant.temp - self.setpoint) / 100.0,   # normalized error
+            (self.plant.temp - self.prev_temp) / 10.0,   # temp change
+            self.plant.o2 / 10.0,                        # normalized oxygen
+            self.plant.fuel / 20.0                       # normalized fuel
         ], dtype=np.float32)
 
+    # =========================
+    # STEP
+    # =========================
     def step(self, action):
-        # MPC Kararı
-        u_mpc = self.mpc.optimize(self.plant)
-        
-        # Hibrit Karar (MPC + RL)
-        total_fuel = u_mpc + action[0]
-        
-        # Simülasyon Adımı
-        self.prev_temp = self.plant.temp
-        temp, o2, eff = self.plant.step(total_fuel, 1000.0)
-        
-        # Ödül: Hata karesi cezası + Verimlilik ödülü - Gereksiz RL müdahale cezası
-        error = abs(temp - self.setpoint)
-        reward = -(error**2 * 0.05) + (eff * 10) - (abs(action[0]) * 5)
-        
-        return self._get_obs(), reward, False, False, {}
+        self.step_count += 1
 
+        # MPC action
+        u_mpc = self.mpc.optimize(self.plant)
+
+        # RL residual (scaled)
+        rl_action = np.tanh(action[0]) * 0.05
+
+        # Total control
+        total_fuel = u_mpc + rl_action
+
+        # Save previous state
+        self.prev_temp = self.plant.temp
+
+        # Plant step
+        temp, o2, eff = self.plant.step(total_fuel, 1000.0)
+
+        # =========================
+        # REWARD FUNCTION
+        # =========================
+        error = temp - self.setpoint
+
+        reward = -(error ** 2 * 0.1)
+
+        # smooth control penalty
+        action_diff = abs(action[0] - self.last_action)
+        reward -= action_diff * 2.0
+
+        # small stability bonus
+        if abs(error) < 1.0:
+            reward += 2.0
+
+        self.last_action = float(action[0])
+
+        # =========================
+        # TERMINATION LOGIC
+        # =========================
+        terminated = abs(error) < 0.5
+        truncated = self.step_count >= self.max_steps
+
+        return self._get_obs(), reward, terminated, truncated, {}
+
+    # =========================
+    # RESET
+    # =========================
     def reset(self, seed=None, options=None):
-        if seed is not None: set_random_seed(seed)
+        super().reset(seed=seed)
+
         self.plant = RotaryKilnDigitalTwin()
+        self.mpc = MPC(
+            prediction_horizon=self.cfg['mpc']['prediction_horizon'],
+            control_horizon=self.cfg['mpc']['control_horizon']
+        )
+
         self.prev_temp = 1400.0
+        self.last_action = 0.0
+        self.step_count = 0
+
         return self._get_obs(), {}
 
-# --- 2. PARALEL ORTAM YARDIMCISI ---
-def make_env(rank, seed=0):
+
+# =========================
+# ENV FACTORY
+# =========================
+def make_env(cfg):
     def _init():
-        env = ResidualKilnEnv()
-        env.reset(seed=seed + rank)
-        return env
+        return ResidualKilnEnv(cfg)
     return _init
 
-# --- 3. EĞİTİM VE TEST ---
-def run_parallel_training(num_cpu=11):
-    model_path = "ppo_kiln_hybrid"
-    
-    # Paralel ortamları oluştur
-    print(f"\n> {num_cpu} çekirdek üzerinde paralel simülasyonlar başlatılıyor...")
-    env = SubprocVecEnv([make_env(i) for i in range(num_cpu)])
-    
-    # Modeli oluştur (PPO)
-    model = PPO("MlpPolicy", env, verbose=1, learning_rate=3e-4, n_steps=2048)
-    
-    print("> Eğitim başladı. İşlemci kullanımını şimdi kontrol edebilirsin.")
-    model.learn(total_timesteps=150000) # 150k adım 14 çekirdekle hızlı biter
-    model.save(model_path)
-    print(f"> Model kaydedildi: {model_path}")
-    
-    return model_path
 
-if __name__ == "__main__":
-    # 1. EĞİTİM
-    # Not: Multiprocessing için Windows'ta bu blok şarttır.
-    m_path = run_parallel_training(num_cpu=12)
-    
-    # 2. GÖRSELLEŞTİRME İÇİN TEK BİR TEST KOŞUSU
-    print("\n> Eğitim sonrası performans testi yapılıyor...")
-    test_env = ResidualKilnEnv()
-    model = PPO.load(m_path)
-    
+# =========================
+# TRAIN FUNCTION
+# =========================
+def train_model(cfg):
+
+    env = SubprocVecEnv(
+        [make_env(cfg) for _ in range(cfg['hardware']['num_cpu'])]
+    )
+
+    model = PPO(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        learning_rate=float(cfg['rl']['learning_rate']),
+        n_steps=cfg['rl']['n_steps'],
+        batch_size=cfg['rl']['batch_size'],
+        gamma=cfg['rl']['gamma'],
+        device=cfg['hardware']['device']
+    )
+
+    model.learn(total_timesteps=cfg['rl']['total_timesteps'])
+
+    return model
+
+
+# =========================
+# TEST FUNCTION
+# =========================
+def run_test(model, cfg):
+    env = ResidualKilnEnv(cfg)
+    obs, _ = env.reset()
+
     history = []
-    obs, _ = test_env.reset()
-    for i in range(3000):
+
+    for i in range(5000):
+
+        # --- MPC ---
+        u_mpc = env.mpc.optimize(env.plant)
+
+        # --- RL ---
         action, _ = model.predict(obs, deterministic=True)
-        # Test sırasında bozucu etkiler ekleyelim
-        if 1000 < i < 1100: test_env.plant.temp -= 4.0
-        
-        # Adım atarken MPC + RL birleşik çalışır (Env içinde)
-        obs, reward, _, _, _ = test_env.step(action)
-        
+
+        # --- STEP ---
+        obs, _, _, _, _ = env.step(action)
+
+        # =========================
+        # FIX: MPC LOG EKLENDİ
+        # =========================
+        env.mpc.log_step(
+            step=i,
+            fuel=float(u_mpc),
+            temp=float(env.plant.temp),
+            o2=float(env.plant.o2)
+        )
+
+        # --- CSV HISTORY ---
         history.append({
             "step": i,
-            "temp": test_env.plant.temp,
-            "u_rl": action[0],
-            "fuel": test_env.plant.fuel
+            "temp": float(env.plant.temp),
+            "u_rl": float(action[0]),
+            "u_mpc": float(u_mpc),
+            "fuel": float(env.plant.fuel)
         })
 
-    # Grafikleme
-    df = pd.DataFrame(history)
-    plt.figure(figsize=(12, 5))
-    plt.plot(df['step'], df['temp'], color='red', label='Sıcaklık (MPC+RL)')
-    plt.axhline(y=1450, color='black', linestyle='--')
-    plt.title("Eğitim Sonrası Hibrit Kontrol Performansı")
-    plt.legend()
-    plt.show()
+    return history, env

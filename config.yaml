@@ -16,7 +16,7 @@ rl:
   n_steps: 4096
   batch_size: 256
   gamma: 0.99
-  action_limit: 0.02 # Testere dişlerini engellemek için düşürdük
+  action_limit: 0.03 
 
 # Dosya Yolları
 paths:

@@ -3,96 +3,135 @@ import json
 from scipy.optimize import minimize
 from src.digital_twin.dt import RotaryKilnDigitalTwin
 
+
 class MPC:
     def __init__(self, prediction_horizon=30, control_horizon=3):
-        """
-        Gelişmiş Vektörel MPC Kontrolcüsü
-        :param prediction_horizon (P): Sistemin gelecekteki tepkisini izleme süresi
-        :param control_horizon (M): Kaç adım sonrasına kadar karar alınacağı
-        """
         self.P = prediction_horizon
         self.M = control_horizon
+
         self.setpoint = 1450
-        
-        # PARAMETRE AYARLARI
-        self.lambda_u = 120.0   # Yakıt değişim cezası (Vektörel yapıda biraz daha yüksek tutulabilir)
-        self.max_step_change = 0.05 # Slew rate limiti
-        
+
+        # cost weights
+        self.lambda_u = 120.0
+
+        # logging
         self.log = []
 
+    # =========================
+    # COST FUNCTION
+    # =========================
     def _objective(self, fuel_sequence, plant):
-        """Maliyet fonksiyonu: Sıcaklık hatası + Kontrol çabası"""
+
         sim = self._clone(plant)
+
         temps = []
-        
-        # Kontrol ufku dışındaki adımlar için son kontrol değerini kullan (Zero-order hold)
+        o2_values = []
+
+        # RL disturbance awareness (soft coupling)
+        rl_bias = 0.0  # residual RL etkisi varsayımı (0-centered)
+
         full_sequence = np.zeros(self.P)
         full_sequence[:self.M] = fuel_sequence
         full_sequence[self.M:] = fuel_sequence[-1]
-        
-        # Simülasyonu P adımı boyunca koştur
-        for i in range(self.P):
-            temp, _, _ = sim.step(full_sequence[i], 1000.0)
-            temps.append(temp)
-        
-        # 1. Hataların karesi (Setpoint takibi)
-        mse = np.mean((np.array(temps) - self.setpoint)**2)
-        
-        # 2. Kontrol Çabası (Süreklilik/Düzgünleştirme)
-        # Mevcut yakıtla ilk önerilen yakıt arasındaki ve önerilenlerin kendi arasındaki farkı cezalandır
-        diffs = np.diff(np.insert(fuel_sequence, 0, plant.fuel))
-        smoothness = self.lambda_u * np.sum(diffs**2)
-        
-        return mse + smoothness
 
+        for i in range(self.P):
+
+            temp, o2, _ = sim.step(full_sequence[i] + rl_bias, 1000.0)
+
+            temps.append(temp)
+            o2_values.append(o2)
+
+        temps = np.array(temps)
+        o2_values = np.array(o2_values)
+
+        # =========================
+        # 1. TRACKING ERROR
+        # =========================
+        mse = np.mean((temps - self.setpoint) ** 2)
+
+        # =========================
+        # 2. O2 COUPLING PENALTY
+        # =========================
+        o2_penalty = 5.0 * np.mean((o2_values - 3.0) ** 2)
+
+        # =========================
+        # 3. SMOOTHNESS
+        # =========================
+        diffs = np.diff(np.concatenate([[plant.fuel], fuel_sequence]))
+        smoothness = self.lambda_u * np.sum(diffs ** 2)
+
+        # =========================
+        # 4. ENERGY PENALTY (optional realism)
+        # =========================
+        energy_penalty = 0.01 * np.sum(fuel_sequence ** 2)
+
+        return mse + smoothness + o2_penalty + energy_penalty
+
+    # =========================
+    # OPTIMIZATION
+    # =========================
     def optimize(self, plant):
-        # Başlangıç tahmini: Mevcut yakıt değerini M adım boyunca koru
+
         initial_guess = np.full(self.M, plant.fuel)
-        
-        # Yakıt sınırları (Constraint)
+
         bounds = [(12.0, 22.0) for _ in range(self.M)]
-        
-        # Optimizasyon (SLSQP kısıtlı optimizasyon için uygundur)
+
         res = minimize(
-            self._objective, 
-            initial_guess, 
-            args=(plant,), 
-            bounds=bounds, 
+            self._objective,
+            initial_guess,
+            args=(plant,),
+            bounds=bounds,
             method='SLSQP'
         )
-        
-        # Sadece ilk adımı seç (Receding Horizon prensibi)
+
         target_fuel = res.x[0]
-        
-        # --- FİZİKSEL KISIT: Slew Rate (Hız Limiti) ---
+
+        # =========================
+        # ADAPTIVE SLEW RATE
+        # =========================
         current_fuel = plant.fuel
+
+        temp_error = abs(plant.temp - self.setpoint)
+
+        max_step = np.clip(temp_error / 1000.0, 0.02, 0.1)
+
         diff = target_fuel - current_fuel
-        
-        if abs(diff) > self.max_step_change:
-            actual_fuel = current_fuel + np.sign(diff) * self.max_step_change
+
+        if abs(diff) > max_step:
+            actual_fuel = current_fuel + np.sign(diff) * max_step
         else:
             actual_fuel = target_fuel
-            
-        # Histerezis / Deadband (0.01 altındaki oynamalar vana ömrü için engellenir)
+
+        # =========================
+        # DEADZONE
+        # =========================
         if abs(actual_fuel - current_fuel) < 0.01:
             return current_fuel
-            
+
         return actual_fuel
 
+    # =========================
+    # CLONE (DIGITAL TWIN COPY)
+    # =========================
     def _clone(self, plant):
-        """Digital Twin kopyası oluşturur"""
-        
+
         sim = RotaryKilnDigitalTwin()
-        # Durum transferi
+
         sim.temp = plant.temp
         sim.o2 = plant.o2
         sim.fuel = plant.fuel
         sim.fan = plant.fan
-        if hasattr(plant, 'fuel_history'):
+
+        if hasattr(plant, "fuel_history"):
             sim.fuel_history = plant.fuel_history.copy()
+
         return sim
 
+    # =========================
+    # LOGGING
+    # =========================
     def log_step(self, step, fuel, temp, o2):
+
         self.log.append({
             "step": int(step),
             "fuel": float(fuel),
