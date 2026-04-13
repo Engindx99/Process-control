@@ -1,6 +1,7 @@
 import numpy as np
 import json
 from scipy.optimize import minimize
+from digital_twin.dt import RotaryKilnDigitalTwin
 
 class MPC:
     def __init__(self, prediction_horizon=30, control_horizon=3):
@@ -80,7 +81,7 @@ class MPC:
 
     def _clone(self, plant):
         """Digital Twin kopyası oluşturur"""
-        from digital_twin.dt import RotaryKilnDigitalTwin
+        
         sim = RotaryKilnDigitalTwin()
         # Durum transferi
         sim.temp = plant.temp

@@ -1,0 +1,25 @@
+# Donanım ve Paralelleştirme
+hardware:
+  num_cpu: 11
+  device: "cuda" # veya "cpu"
+
+# MPC Ayarları
+mpc:
+  prediction_horizon: 30
+  control_horizon: 3
+  setpoint: 1450.0
+
+# RL (PPO) Hiperparametreleri
+rl:
+  total_timesteps: 150000
+  learning_rate: 0.0003
+  n_steps: 4096
+  batch_size: 256
+  gamma: 0.99
+  action_limit: 0.05 # Testere dişlerini engellemek için düşürdük
+
+# Dosya Yolları
+paths:
+  model_name: "ppo_kiln_residual_model"
+  log_json: "final_mpc_log.json"
+  results_csv: "hybrid_control_results.csv"

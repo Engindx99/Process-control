@@ -1,113 +1,115 @@
 import os
-import json
+import yaml
 import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
+import matplotlib.pyplot as plt
+import gymnasium as gym
+from gymnasium import spaces
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import SubprocVecEnv
+
+# Kendi modüllerinden importlar
 from digital_twin.dt import RotaryKilnDigitalTwin
 from mpc.mpc import MPC
 
-def calculate_metrics(log_data):
-    """Simülasyon sonuçlarını analiz eder ve performans metriklerini hesaplar."""
-    temps = np.array([step['temp'] for step in log_data])
-    setpoints = np.array([step['setpoint'] for step in log_data])
-    errors = temps - setpoints
-    
-    mse = np.mean(errors**2)
-    mae = np.mean(np.abs(errors))
-    rmse = np.sqrt(mse)
-    max_error = np.max(np.abs(errors))
-    
-    return {
-        "MSE": mse,
-        "MAE": mae,
-        "RMSE": rmse,
-        "Max Error": max_error,
-        "errors": errors
-    }
+# --- 1. CONFIG YÜKLEME ---
+def load_config():
+    with open("config.yaml", "r") as f:
+        return yaml.safe_load(f)
 
-def run_simulation():
-    """Simülasyonu çalıştır ve verileri kaydet"""
-    print("=" * 70)
-    print("MPC CONTROLLER - Yeni Simülasyon Başlatılıyor")
-    print("=" * 70)
-    
-    plant = RotaryKilnDigitalTwin()
-    mpc = MPC(prediction_horizon=30, control_horizon=3) 
-    steps = 5000
-    
-    for i in range(steps):
-        # Bozucu etkiler
-        plant.temp += np.random.normal(0, 1.0)
-        if 500 < i < 550: plant.temp += 3
-        if 1200 < i < 1250: plant.temp -= 2
-        if 1600 < i < 1650: plant.temp += 2.5
+cfg = load_config()
+
+# --- 2. RL ORTAMI ---
+class ResidualKilnEnv(gym.Env):
+    def __init__(self):
+        super(ResidualKilnEnv, self).__init__()
+        self.plant = RotaryKilnDigitalTwin()
+        # Config'den gelen MPC ayarları
+        self.mpc = MPC(
+            prediction_horizon=cfg['mpc']['prediction_horizon'], 
+            control_horizon=cfg['mpc']['control_horizon']
+        )
+        self.setpoint = cfg['mpc']['setpoint']
         
-        fuel = mpc.optimize(plant)
-        temp, o2, _ = plant.step(fuel, 1000.0)
-        mpc.log_step(i, fuel, temp, o2)
+        limit = cfg['rl']['action_limit']
+        self.action_space = spaces.Box(low=-limit, high=limit, shape=(1,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
+        self.prev_temp = 1400.0
+
+    def step(self, action):
+        u_mpc = self.mpc.optimize(self.plant)
+        total_fuel = u_mpc + action[0]
         
-        if i % 500 == 0:
-            print(f"Step {i:4d}: T={temp:6.1f}°C | Fuel={fuel:5.2f}")
-    
-    mpc.save("mpc_log.json")
-    return mpc.log
+        self.prev_temp = self.plant.temp
+        temp, o2, eff = self.plant.step(total_fuel, 1000.0)
+        
+        error = abs(temp - self.setpoint)
+        # Ödül fonksiyonunu kararlılık odaklı güncelledik
+        reward = -(error * 0.2) - (abs(action[0]) * 5.0)
+        if error < 1.0: reward += 10.0 # Hedefe yakınsa büyük ödül
+        
+        return self._get_obs(), reward, False, False, {}
 
-def plot_results(data, metrics):
-    df = pd.DataFrame(data)
-    df['error'] = metrics['errors']
-    df['temp_smooth'] = df['temp'].rolling(window=15, min_periods=1).mean()
+    def _get_obs(self):
+        return np.array([
+            self.plant.temp - self.setpoint,
+            self.plant.temp - self.prev_temp,
+            self.plant.o2,
+            self.plant.fuel
+        ], dtype=np.float32)
 
-    plt.style.use('default') 
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
-    fig.patch.set_facecolor('white')
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.plant = RotaryKilnDigitalTwin()
+        self.prev_temp = 1400.0
+        return self._get_obs(), {}
 
-    # 1. Grafik: Termal Analiz (Üstte)
-    ax1.plot(df['step'], df['temp'], color='red', alpha=0.15, linewidth=0.5)
-    ax1.plot(df['step'], df['temp_smooth'], color='red', linewidth=1.5, label='Fırın Sıcaklığı (°C)')
-    ax1.axhline(y=1450, color='black', linestyle='--', linewidth=1.2, label='Setpoint (1450°C)')
-    ax1.set_title("Rotary Kiln - Thermal Analysis", fontsize=14, fontweight='bold')
-    ax1.set_ylabel("Temperature (°C)")
-    ax1.legend(loc='upper right')
-    ax1.grid(True, linestyle=':', alpha=0.6)
+def make_env():
+    return ResidualKilnEnv()
 
-    # 2. Grafik: Yakıt Kontrolü (Ortada)
-    ax2.plot(df['step'], df['fuel'], color='green', linewidth=1.2, label='Fuel Flow Rate (m³/h)')
-    ax2.set_title("MPC Fuel Control Signal", fontsize=13, fontweight='bold')
-    ax2.set_ylabel("Fuel Rate")
-    ax2.legend(loc='upper right')
-    ax2.grid(True, linestyle=':', alpha=0.6)
-
-    # 3. Grafik: Kontrol Hatası (En Altta)
-    ax3.fill_between(df['step'], df['error'], color='darkorange', alpha=0.4, label='Error Value (°C)')
-    ax3.plot(df['step'], df['error'], color='darkorange', linewidth=0.7)
-    ax3.axhline(y=0, color='black', linestyle='-', linewidth=1.0)
-    ax3.set_title("Control Error", fontsize=13, fontweight='bold')
-    ax3.set_ylabel("Error (°C)")
-    ax3.set_xlabel("Step")
-    ax3.legend(loc='upper right')
-    ax3.grid(True, linestyle=':', alpha=0.6)
-
-    plt.tight_layout()
-    plt.show()
-
+# --- 3. ANA ÇALIŞTIRICI ---
 if __name__ == "__main__":
-    log_file = "mpc_log.json"
-    
-    if os.path.exists(log_file):
-        print(f"\n📂 {log_file} yüklendi, analiz yapılıyor...")
-        with open(log_file, "r") as f:
-            log_data = json.load(f)
+    model_zip = cfg['paths']['model_name'] + ".zip"
+
+    # MODEL KONTROLÜ
+    if os.path.exists(model_zip):
+        print(f"✅ Model yüklendi: {model_zip}")
+        model = PPO.load(cfg['paths']['model_name'], device=cfg['hardware']['device'])
     else:
-        log_data = run_simulation()
+        print(f"🚀 Eğitim başlıyor ({cfg['hardware']['num_cpu']} çekirdek)...")
+        env = SubprocVecEnv([make_env for _ in range(cfg['hardware']['num_cpu'])])
+        
+        model = PPO(
+            "MlpPolicy", 
+            env, 
+            verbose=1,
+            learning_rate=cfg['rl']['learning_rate'],
+            n_steps=cfg['rl']['n_steps'],
+            batch_size=cfg['rl']['batch_size'],
+            gamma=cfg['rl']['gamma'],
+            device=cfg['hardware']['device']
+        )
+        
+        model.learn(total_timesteps=cfg['rl']['total_timesteps'])
+        model.save(cfg['paths']['model_name'])
+
+    # --- TEST VE KAYIT ---
+    print("📊 Test ve Kayıt işlemi...")
+    test_env = ResidualKilnEnv()
+    obs, _ = test_env.reset()
+    history = []
+
+    for i in range(5000):
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, _, _, _ = test_env.step(action)
+        
+        test_env.mpc.log_step(i, test_env.plant.fuel, test_env.plant.temp, test_env.plant.o2)
+        history.append({"step": i, "temp": test_env.plant.temp, "u_rl": action[0]})
+
+    test_env.mpc.save(cfg['paths']['log_json'])
+    pd.DataFrame(history).to_csv(cfg['paths']['results_csv'], index=False)
     
-    metrics = calculate_metrics(log_data)
-    
-    print("\n" + "="*40)
-    print(f"📊 MPC PERFORMANCE REPORT")
-    print("-" * 40)
-    print(f"MAE:  {metrics['MAE']:.4f} °C")
-    print(f"RMSE: {metrics['RMSE']:.4f} °C")
-    print(f"Max:  {metrics['Max Error']:.4f} °C")
-    print("="*40)
-    
-    plot_results(log_data, metrics)
+    # Grafik
+    plt.plot([h['temp'] for h in history])
+    plt.axhline(y=1450, color='r', linestyle='--')
+    plt.show()
