@@ -1,25 +1,30 @@
 # Donanım ve Paralelleştirme
 hardware:
   num_cpu: 11
-  device: "cuda" # veya "cpu"
+  device: "cuda" 
 
 # MPC Ayarları
 mpc:
   prediction_horizon: 20
-  control_horizon: 2
+  # 2'den 5'e çıkardık: MPC'nin gürültüye daha esnek tepki vermesini sağlar
+  control_horizon: 5 
   setpoint: 1450.0
 
 # RL (PPO) Hiperparametreleri
 rl:
   total_timesteps: 100000
   learning_rate: 0.0003
-  n_steps: 4096
+  # 4096'dan 2048'e düşürdük: 100k adımda 2 kat daha fazla güncelleme (update) yapar
+  n_steps: 2048 
   batch_size: 256
   gamma: 0.99
-  action_limit: 0.03 
+  # 0.03'ten 0.1'e çıkardık: RL'in gürültüyü sönümlemek için yeterli gücü olur
+  action_limit: 0.1 
+  # Bonus: PPO'nun "sabit bir değere" çakılmasını önlemek için entropy ekle
+  ent_coef: 0.01
 
 # Dosya Yolları
 paths:
-  model_name: "models/ppo_kiln_residual_model"  # .zip burada olacak
-  log_json: "data/final_mpc_log.json"
-  results_csv: "data/hybrid_control_results.csv"
+  model_name: "models/ppo_kiln_hybrid_v2" # Versiyonu ayırmak için v2 yaptık
+  log_json: "data/final_mpc_log_v2.json"
+  results_csv: "data/hybrid_control_results_v2.csv"
