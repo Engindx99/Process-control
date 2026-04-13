@@ -5,18 +5,18 @@ hardware:
 
 # MPC Ayarları
 mpc:
-  prediction_horizon: 30
-  control_horizon: 3
+  prediction_horizon: 20
+  control_horizon: 2
   setpoint: 1450.0
 
 # RL (PPO) Hiperparametreleri
 rl:
-  total_timesteps: 150000
+  total_timesteps: 100000
   learning_rate: 0.0003
   n_steps: 4096
   batch_size: 256
   gamma: 0.99
-  action_limit: 0.05 # Testere dişlerini engellemek için düşürdük
+  action_limit: 0.02 # Testere dişlerini engellemek için düşürdük
 
 # Dosya Yolları
 paths:
