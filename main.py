@@ -9,8 +9,8 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 # Kendi modüllerinden importlar
-from digital_twin.dt import RotaryKilnDigitalTwin
-from mpc.mpc import MPC
+from src.digital_twin.dt import RotaryKilnDigitalTwin
+from src.mpc.mpc import MPC
 
 # --- 1. CONFIG YÜKLEME ---
 def load_config():

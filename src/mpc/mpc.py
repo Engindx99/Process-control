@@ -1,7 +1,7 @@
 import numpy as np
 import json
 from scipy.optimize import minimize
-from digital_twin.dt import RotaryKilnDigitalTwin
+from src.digital_twin.dt import RotaryKilnDigitalTwin
 
 class MPC:
     def __init__(self, prediction_horizon=30, control_horizon=3):

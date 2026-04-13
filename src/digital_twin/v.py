@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from digital_twin.dt import RotaryKilnDigitalTwin
+from src.digital_twin.dt import RotaryKilnDigitalTwin
 
 df = pd.read_csv("kiln_dataset.csv")
 

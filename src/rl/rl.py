@@ -9,8 +9,8 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.utils import set_random_seed
 
 # Mevcut modüllerinden importlar
-from digital_twin.dt import RotaryKilnDigitalTwin
-from mpc.mpc import MPC
+from src.digital_twin.dt import RotaryKilnDigitalTwin
+from src.mpc.mpc import MPC
 
 # --- 1. RL ORTAMI (WRAPPER) ---
 class ResidualKilnEnv(gym.Env):
