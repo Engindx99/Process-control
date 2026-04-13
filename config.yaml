@@ -20,6 +20,6 @@ rl:
 
 # Dosya Yolları
 paths:
-  model_name: "ppo_kiln_residual_model"
-  log_json: "final_mpc_log.json"
-  results_csv: "hybrid_control_results.csv"
+  model_name: "models/ppo_kiln_residual_model"  # .zip burada olacak
+  log_json: "data/final_mpc_log.json"
+  results_csv: "data/hybrid_control_results.csv"

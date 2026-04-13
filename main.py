@@ -2,13 +2,16 @@ import os
 import yaml
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
+import sys
 
-# Kendi modüllerinden importlar
+# --- 0. PATH AYARI ---
+# Modüllerin (src) bulunabilmesi için ana dizini ekliyoruz
+sys.path.append(os.getcwd())
+
 from src.digital_twin.dt import RotaryKilnDigitalTwin
 from src.mpc.mpc import MPC
 
@@ -19,7 +22,7 @@ def load_config():
 
 cfg = load_config()
 
-# --- 2. RL ORTAMI ---
+# --- 2. RESIDUAL RL ORTAMI ---
 class ResidualKilnEnv(gym.Env):
     def __init__(self):
         super(ResidualKilnEnv, self).__init__()
@@ -46,7 +49,7 @@ class ResidualKilnEnv(gym.Env):
         
         error = abs(temp - self.setpoint)
         
-        # Ödül Fonksiyonu
+        # Reward Fonksiyonu
         reward = -(error**2 * 0.1) 
         action_diff = abs(action[0] - self.last_action[0])
         reward -= action_diff * 10.0 
@@ -73,67 +76,77 @@ class ResidualKilnEnv(gym.Env):
         self.last_action = np.array([0.0], dtype=np.float32)
         return self._get_obs(), {}
 
-# --- 3. PARALEL ÇALIŞTIRMA İÇİN DÜZELTİLMİŞ FONKSİYON ---
 def make_env():
-    # Windows'ta SubprocVecEnv bazen doğrudan fonksiyon ister
     return ResidualKilnEnv()
 
-# --- 4. ANA ÇALIŞTIRICI ---
+# --- 3. ANA ÇALIŞTIRICI ---
 if __name__ == "__main__":
-    model_name_path = cfg['paths']['model_name']
-    model_zip = model_name_path + ".zip"
+    # Gerekli klasörleri oluştur
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+    os.makedirs("experiments/plots", exist_ok=True)
 
-    if os.path.exists(model_zip):
-        print(f"✅ Model yüklendi: {model_zip}")
-        model = PPO.load(model_name_path, device=cfg['hardware']['device'])
+    model_path = cfg['paths']['model_name'] 
+    zip_path = model_path if model_path.endswith(".zip") else model_path + ".zip"
+
+    # --- MODEL YÜKLEME VEYA EĞİTİM ---
+    if os.path.exists(zip_path):
+        print(f"✅ Kayıtlı model bulundu: {zip_path}. Yükleniyor...")
+        model = PPO.load(model_path, device=cfg['hardware']['device'])
     else:
-        print(f"🚀 Eğitim başlıyor ({cfg['hardware']['num_cpu']} çekirdek)...")
-        # DÜZELTME: [make_env for _ in ...] yerine lambda veya liste içine çağrılmamış hali
-        env = SubprocVecEnv([make_env for _ in range(cfg['hardware']['num_cpu'])])
-        
-        model = PPO(
-            "MlpPolicy", 
-            env, 
-            verbose=1,
-            learning_rate=float(cfg['rl']['learning_rate']), # YAML'dan bazen float/str karışabilir
-            n_steps=cfg['rl']['n_steps'],
-            batch_size=cfg['rl']['batch_size'],
-            gamma=cfg['rl']['gamma'],
-            device=cfg['hardware']['device']
-        )
-        
-        model.learn(total_timesteps=cfg['rl']['total_timesteps'])
-        model.save(model_name_path)
+        fallback = "ppo_kiln_residual_model.zip"
+        if os.path.exists(fallback):
+            print(f"⚠️ Model ana dizinde bulundu, {model_path} konumuna taşınıyor...")
+            os.rename(fallback, zip_path)
+            model = PPO.load(model_path, device=cfg['hardware']['device'])
+        else:
+            print(f"🚀 Model bulunamadı. Yeni eğitim başlıyor ({cfg['hardware']['num_cpu']} çekirdek)...")
+            env = SubprocVecEnv([make_env for _ in range(cfg['hardware']['num_cpu'])])
+            
+            model = PPO(
+                "MlpPolicy", 
+                env, 
+                verbose=1,
+                learning_rate=float(cfg['rl']['learning_rate']),
+                n_steps=cfg['rl']['n_steps'],
+                batch_size=cfg['rl']['batch_size'],
+                gamma=cfg['rl']['gamma'],
+                device=cfg['hardware']['device']
+            )
+            
+            model.learn(total_timesteps=cfg['rl']['total_timesteps'])
+            model.save(model_path)
+            env.close() # Kaynakları serbest bırak
+            print(f"💾 Eğitim tamamlandı: {zip_path}")
 
-    # --- TEST VE KAYIT ---
-    print("📊 Test ve Kayıt işlemi...")
+    # --- TEST VE VERİ ÜRETİMİ ---
+    print("📊 Test simülasyonu başlatılıyor...")
     test_env = ResidualKilnEnv()
     obs, _ = test_env.reset()
     history = []
 
-    # Test süresini 5000 adıma çıkardın, bu fırın kararlılığını görmek için çok iyi
+    # 5000 adım: Fırın dinamiğini uzun vadeli görmek için
     for i in range(5000):
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, _, _, _ = test_env.step(action)
+        # Kıyaslama için saf MPC kararını al
+        u_mpc_base = test_env.mpc.optimize(test_env.plant)
         
-        test_env.mpc.log_step(i, test_env.plant.fuel, test_env.plant.temp, test_env.plant.o2)
+        # RL tahmini (Deterministic=True: En iyi aksiyonu seç)
+        action, _ = model.predict(obs, deterministic=True)
+        obs, _, _, _, _ = test_env.step(action)
+        
         history.append({
             "step": i, 
-            "temp": test_env.plant.temp, 
-            "u_rl": action[0],
-            "fuel": test_env.plant.fuel
+            "temp": float(test_env.plant.temp), 
+            "u_rl_residual": float(action[0]),
+            "u_mpc_base": float(u_mpc_base),
+            "total_fuel": float(test_env.plant.fuel),
+            "error": float(test_env.plant.temp - test_env.setpoint)
         })
 
+    # Sonuçları Kaydet
+    df = pd.DataFrame(history)
+    df.to_csv(cfg['paths']['results_csv'], index=False)
     test_env.mpc.save(cfg['paths']['log_json'])
-    pd.DataFrame(history).to_csv(cfg['paths']['results_csv'], index=False)
     
-    # Grafik çıktılarını daha detaylı görelim
-    plt.figure(figsize=(12,6))
-    plt.plot([h['temp'] for h in history], label='Fırın Sıcaklığı', color='blue')
-    plt.axhline(y=1450, color='r', linestyle='--', label='Set Point (1450°C)')
-    plt.title("Eğitim Sonrası Hibrit (MPC+RL) Kontrol Performansı")
-    plt.xlabel("Adım")
-    plt.ylabel("Sıcaklık (°C)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.show()
+    print(f" Başarılı! Veriler '{cfg['paths']['results_csv']}' dosyasına yazıldı.")
+    print(" Şimdi 'python eval.py' komutuyla 3 panelli analiz grafiğini oluşturabilirsin.")
