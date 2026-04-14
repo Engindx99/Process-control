@@ -36,7 +36,7 @@ class ResidualKilnEnv(gym.Env):
         self.prev_temp = cfg['simulation'].get('initial_temp', 1400.0)
         self.last_action = 0.0
         self.step_count = 0
-        self.max_steps = cfg['simulation'].get('total_steps', 5000)
+        self.max_steps = cfg['simulation'].get('total_steps', 3000)
 
     def _get_obs(self):
         return np.array([
@@ -93,5 +93,3 @@ def make_env(cfg):
         return ResidualKilnEnv(cfg)
     return _init
 
-# Alt kısımdaki if __name__ == "__main__" bloğunu 
-# karmaşıklığı önlemek için silebilirsin veya boş bırakabilirsin.

@@ -11,7 +11,6 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 try:
     from src.rl.rl import make_env, ResidualKilnEnv
 except ModuleNotFoundError:
-    # Eğer PYTHONPATH ayarlanmadıysa manuel eklemeyi dene
     current_dir = os.path.dirname(os.path.abspath(__file__))
     if current_dir not in sys.path:
         sys.path.append(current_dir)
@@ -28,9 +27,9 @@ def load_config():
         if os.path.exists(path):
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
-    raise FileNotFoundError(f"❌ Yapılandırma dosyası bulunamadı! Aranan konumlar: {possible_paths}")
+    raise FileNotFoundError(f"❌ Yapılandırma dosyası bulunamadı!")
 
-def run_final_test(model, config, n_steps=1000):
+def run_final_test(model, config, n_steps=3000):
     """Eğitim bittiğinde ajanın performansını test eder ve verileri toplar."""
     print(f"📊 Test sürüşü başlatılıyor ({n_steps} adım)...")
     test_env = ResidualKilnEnv(config)
@@ -58,70 +57,72 @@ def run_final_test(model, config, n_steps=1000):
 # ANA AKIŞ (MAIN EXECUTION)
 # =================================================================
 if __name__ == "__main__":
-    # Windows Multiprocessing Desteği (Kritik!)
     multiprocessing.freeze_support()
 
     # 1. Yapılandırmayı Yükle
     try:
         config = load_config()
     except Exception as e:
-        print(e)
+        print(f"❌ Yapılandırma hatası: {e}")
         sys.exit(1)
 
     total_steps = config['rl'].get('total_timesteps', 100000)
+    model_path = config['paths']['model_save_path']
     
-    print(f"🚀 --- Döner Fırın Hibrit Eğitimi Hazırlığı ---")
+    print(f"🚀 --- Döner Fırın Hibrit Kontrol Sistemi ---")
     print(f"📍 Hedef: {total_steps} Adım | Çekirdek: {config['hardware']['num_cpu']}")
-    print(f"📍 Cihaz: {config['hardware']['device']}")
 
     # 2. Klasörleri Otomatik Oluştur
     os.makedirs("models", exist_ok=True)
-    os.makedirs("data", exist_ok=True)
+    os.makedirs("experiments/plots", exist_ok=True)
 
-    # 3. Paralel Ortamları (SubprocVecEnv) Başlat
-    # Her çekirdek için bir ResidualKilnEnv örneği oluşturulur
+    # 3. Paralel Ortamları Başlat
     env = SubprocVecEnv([make_env(config) for _ in range(config['hardware']['num_cpu'])])
 
-    # 4. PPO Algoritmasını Tanımla
-    model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        learning_rate=config['rl']['learning_rate'],
-        n_steps=config['rl']['n_steps'],
-        batch_size=config['rl']['batch_size'],
-        gamma=config['rl']['gamma'],
-        device=config['hardware']['device']
-    )
-
-    # 5. Daha Önce Kaydedilmiş Model Varsa Yükle (Eğitimi Sürdür)
-    model_path = config['paths']['model_save_path']
+    # 4. Model Kontrolü ve Koşullu Eğitim
     if os.path.exists(model_path + ".zip"):
-        print(f"🔄 Mevcut model ({model_path}.zip) bulundu, üzerine eğitim devam ediyor...")
+        # MODEL VARSA: Yükle ve eğitimi atla
+        print(f"✅ Kayıtlı model bulundu: {model_path}.zip")
+        print("🚀 Eğitim atlanıyor, doğrudan teste geçiliyor...")
         model = PPO.load(model_path, env=env)
-    
-    # 6. EĞİTİM DÖNGÜSÜ
+    else:
+        # MODEL YOKSA: PPO'yu tanımla ve eğit
+        print(f"🔍 Model bulunamadı. Sıfırdan eğitime başlanıyor...")
+        model = PPO(
+            "MlpPolicy",
+            env,
+            verbose=1,
+            learning_rate=config['rl']['learning_rate'],
+            n_steps=config['rl']['n_steps'],
+            batch_size=config['rl']['batch_size'],
+            gamma=config['rl']['gamma'],
+            device=config['hardware']['device']
+        )
+        try:
+            print(f"🧠 Sinir ağı eğitiliyor... Lütfen bekleyin.")
+            model.learn(total_timesteps=total_steps)
+            model.save(model_path)
+            print(f"✅ Eğitim tamamlandı ve model kaydedildi.")
+        except KeyboardInterrupt:
+            print("\n🛑 Eğitim durduruldu. Mevcut durum kaydediliyor...")
+            model.save(model_path)
+
+    # 5. SONUÇLARIN KAYDI VE TEST (3000 ADIM)
     try:
-        print(f"🧠 Sinir ağı eğitiliyor... Lütfen bekleyin.")
-        model.learn(total_timesteps=total_steps)
+        # Adım sayısını config'den al (total_steps: 3000)
+        test_duration = config['simulation'].get('total_steps', 3000)
+        df_results = run_final_test(model, config, n_steps=test_duration)
         
-        # Modeli Kaydet
-        model.save(model_path)
-        print(f"✅ Model başarıyla kaydedildi: {model_path}")
+        # CSV Kaydı
+        results_path = "experiments/plots/training_results.csv"
+        df_results.to_csv(results_path, index=False)
+        
+        print(f"📈 Detaylı test verileri '{results_path}' dosyasına kaydedildi.")
+        print(f"✨ İşlem başarıyla tamamlandı.")
 
-        # 7. SONUÇLARIN KAYDI VE TEST
-        df_results = run_final_test(model, config)
-        df_results.to_csv("data/training_results.csv", index=False)
-        print("📈 Detaylı test verileri 'data/training_results.csv' dosyasına kaydedildi.")
-
-    except KeyboardInterrupt:
-        print("\n🛑 Eğitim kullanıcı tarafından durduruldu (Ctrl+C). Mevcut ilerleme kaydediliyor...")
-        model.save(model_path)
-    
     except Exception as e:
-        print(f"❌ Beklenmedik bir hata oluştu: {e}")
+        print(f"❌ Test sırasında bir hata oluştu: {e}")
     
     finally:
-        # Alt işlemleri kapat ve belleği temizle
         env.close()
-        print("🏁 İşlem tamamlandı.")
+        print("🏁 Sistem kapatıldı.")
