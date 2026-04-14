@@ -17,7 +17,7 @@ class RotaryKilnDigitalTwin:
         self.fuel_history = [self.fuel] * 12
 
         # ---------------- PHYSICS PARAMETERS ----------------
-        self.thermal_mass = 0.35
+        self.thermal_mass = 0.05
         self.heat_gain_factor = 20.0
 
         self.conv_factor = 0.00025
