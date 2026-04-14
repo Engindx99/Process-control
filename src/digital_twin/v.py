@@ -3,12 +3,12 @@ import pandas as pd
 import numpy as np
 from src.digital_twin.dt import RotaryKilnDigitalTwin
 
-df = pd.read_csv("kiln_dataset.csv")
+df = pd.read_csv("data/kiln_dataset.csv")
 
 fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
 
 
-y_ticks_sicaklik = np.arange(1200, 1601, 100)
+y_ticks_sicaklik = np.arange(800, 2001, 100)
 axes[0].plot(df["adim"], df["sicaklik"], color="red", linewidth=0.8)
 axes[0].set_ylim(1200, 1600)
 axes[0].set_yticks(y_ticks_sicaklik)

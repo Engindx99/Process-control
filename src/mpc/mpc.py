@@ -1,129 +1,97 @@
 import numpy as np
-import json
 from scipy.optimize import minimize
-from src.digital_twin.dt import RotaryKilnDigitalTwin
+import copy
 
 class MPC:
-    def __init__(self, prediction_horizon=30, control_horizon=3):
-        self.P = prediction_horizon  # Geleceği görme ufku
-        self.M = control_horizon     # Kontrol hamlesi ufku
+    def __init__(self, prediction_horizon=60, control_horizon=8):
+        self.prediction_horizon = prediction_horizon
+        self.control_horizon = control_horizon
         self.setpoint = 1450.0
-
-        # =============================================================
-        # 1. COST WEIGHTS (AGRESİFLİK AYARI)
-        # =============================================================
-        # Yakıt değişim cezası (Smoothness). 120'den 800'e çıkardık.
-        # Bu değer ne kadar yüksekse, MPC o kadar "sakin" davranır.
-        self.lambda_u = 800.0 
         
-        # O2 dengesi cezası
-        self.lambda_o2 = 15.0 
+        # Limitler
+        self.fuel_min = 12.0
+        self.fuel_max = 22.0
+        self.max_delta_u = 0.12 
 
-        # logging
-        self.log = []
-
-    def _objective(self, fuel_sequence, plant):
-        sim = self._clone(plant)
+    def internal_predict(self, current_temp, current_o2, fuel, fan):
+        """
+        Dışarıdaki dt.py'ye muhtaç kalmadan, fırın fiziğini 
+        MPC'nin içinde simüle eden gizli fonksiyon.
+        """
+        # Digital Twin ile aynı fiziksel parametreler
+        thermal_mass = 0.35
+        heat_gain_factor = 20.0
+        T_env = 25.0
         
-        temps = []
-        o2_values = []
+        # O2 Tahmini
+        target_o2 = np.clip((11.6 - 0.40 * fuel) * 0.7 + ((fan / 1000.0) * 14.0 - fuel * 0.58) * 0.3, 1.5, 8.5)
+        pred_o2 = current_o2 + 0.18 * (target_o2 - current_o2)
 
-        # =============================================================
-        # 2. RL BIAS (HIBRIT ZEKA ENTEGRASYONU)
-        # =============================================================
-        # MPC simülasyon yaparken, RL'in son yaptığı müdahaleyi hesaba katar.
-        # Bu, MPC'nin RL'i bir "bozucu etki" sanıp panik yapmasını engeller.
-        rl_bias = getattr(plant, 'last_rl_residual', 0.0)
+        # Sıcaklık Tahmini
+        T_k = current_temp + 273.15
+        T_env_k = T_env + 273.15
 
-        # Kontrol ufku dışındaki adımlar için son yakıt değerini koru
-        full_sequence = np.zeros(self.P)
-        full_sequence[:self.M] = fuel_sequence
-        full_sequence[self.M:] = fuel_sequence[-1]
+        # Yanma Verimi Denklemi
+        comb_eff = (0.6 + 0.4 * np.exp(-0.5 * ((pred_o2 - 3.0) / 1.8) ** 2))
+        
+        heat_gain = fuel * heat_gain_factor * comb_eff + 60.0
+        
+        # Kayıplar (Konveksiyon + Radyasyon)
+        h_loss_conv = (0.005 + 0.00025 * fan) * (current_temp - T_env)
+        h_loss_rad = (0.85 * 5.67e-12 * 7.0 * (T_k**4 - T_env_k**4)) / 5e8
 
-        for i in range(self.P):
-            # Simülasyonda RL etkisini de ekliyoruz
-            temp, o2, _ = sim.step(full_sequence[i] + rl_bias, 1000.0)
-            temps.append(temp)
-            o2_values.append(o2)
+        net_heat = np.clip(heat_gain - h_loss_conv - h_loss_rad, -300, 300)
+        
+        # Fiziksel Düzeltme (Empirical part)
+        target_temp = 1450 * np.exp(-0.5 * ((pred_o2 - 3.0) / 1.2) ** 2)
+        dT = (0.95 * net_heat + 0.01 * (target_temp - current_temp))
+        
+        pred_temp = current_temp + thermal_mass * dT
+        return pred_temp, pred_o2
 
-        temps = np.array(temps)
-        o2_values = np.array(o2_values)
+    def cost_function(self, u_sequence, plant_state):
+        temp_sim, o2_sim, current_fuel = plant_state
+        
+        u_full = np.ones(self.prediction_horizon)
+        u_full[:self.control_horizon] = u_sequence
+        u_full[self.control_horizon:] = u_sequence[-1]
 
-        # --- HATA HESABI (MSE) ---
-        # Sıcaklık farklarını 10'a bölerek normalize ediyoruz (Sayısall kararlılık)
-        mse = np.mean(((temps - self.setpoint) / 10.0) ** 2)
+        cost = 0
+        last_u = current_fuel
 
-        # --- O2 CEZASI ---
-        o2_penalty = self.lambda_o2 * np.mean((o2_values - 3.0) ** 2)
+        for i in range(self.prediction_horizon):
+            # Kendi iç modelimizi kullanıyoruz, AttributeError almazsın!
+            temp_sim, o2_sim = self.internal_predict(temp_sim, o2_sim, u_full[i], 1000.0)
+            
+            # 1. Hedef Takip (Hata Payı)
+            # Gecikmeyi (12 adım) kompanse etmek için 12. adımdan sonrasına daha çok odaklan
+            weight = 10.0 if i > 12 else 1.0
+            cost += weight * (temp_sim - self.setpoint)**2 
 
-        # --- SMOOTHNESS (DEĞİŞİM CEZASI) ---
-        # Mevcut yakıt ile planlanan yakıt arasındaki farkların karesi
-        diffs = np.diff(np.concatenate([[plant.fuel], fuel_sequence]))
-        smoothness = self.lambda_u * np.sum(diffs ** 2)
+            # 2. O2 Kısıtı
+            if o2_sim < 2.8: cost += 2000.0 * (2.8 - o2_sim)**2
 
-        # --- ENERJİ VERİMLİLİĞİ ---
-        energy_penalty = 0.05 * np.mean(fuel_sequence ** 2)
+            # 3. Yakıt Değişim Cezası (Smoothness)
+            if i < self.control_horizon:
+                cost += 481.0 * (u_full[i] - last_u)**2
+                last_u = u_full[i]
 
-        return mse + smoothness + o2_penalty + energy_penalty
+        return cost
 
     def optimize(self, plant):
-        # Mevcut yakıt miktarından başla
-        initial_guess = np.full(self.M, plant.fuel)
+        # Sadece mevcut değerleri alıyoruz, plant'in metodlarını çağırmıyoruz
+        plant_state = (plant.temp, plant.o2, plant.fuel)
+        
+        u0 = np.full(self.control_horizon, plant.fuel)
+        bounds = [(self.fuel_min, self.fuel_max)] * self.control_horizon
 
-        # Fiziksel yakıt sınırları (m3/h)
-        bounds = [(12.0, 22.0) for _ in range(self.M)]
-
-        # Optimizasyon (SLSQP algoritması)
         res = minimize(
-            self._objective,
-            initial_guess,
-            args=(plant,),
-            bounds=bounds,
+            self.cost_function, 
+            u0, 
+            args=(plant_state,),
             method='SLSQP',
-            options={'ftol': 1e-3} # Çok küçük değişimleri görmezden gel (hız için)
+            bounds=bounds,
+            options={'ftol': 1e-3}
         )
 
-        target_fuel = res.x[0]
-        current_fuel = plant.fuel
-
-        # =============================================================
-        # 3. SLEW RATE LIMITER (ZIKZAK ENGELLEYİCİ)
-        # =============================================================
-        # MPC'nin bir adımda yakıtı en fazla ne kadar değiştirebileceğini sabitliyoruz.
-        # Bu, sistemin mekanik ataletine uyum sağlar ve salınımı (oscillation) keser.
-        max_allowed_change = 0.05 
-        
-        diff = target_fuel - current_fuel
-
-        if abs(diff) > max_allowed_change:
-            actual_fuel = current_fuel + np.sign(diff) * max_allowed_change
-        else:
-            actual_fuel = target_fuel
-
-        # Ölü Bölge (Deadzone): Çok küçük değişimler için aktüatörü yorma
-        if abs(actual_fuel - current_fuel) < 0.005:
-            return current_fuel
-
-        return actual_fuel
-
-    def _clone(self, plant):
-        """Fiziksel modelin anlık kopyasını oluşturur (Simülasyon için)"""
-        sim = RotaryKilnDigitalTwin()
-        sim.temp = plant.temp
-        sim.o2 = plant.o2
-        sim.fuel = plant.fuel
-        sim.fan = plant.fan
-        return sim
-
-    def log_step(self, step, fuel, temp, o2):
-        self.log.append({
-            "step": int(step),
-            "fuel": float(fuel),
-            "temp": float(temp),
-            "o2": float(o2),
-            "setpoint": float(self.setpoint)
-        })
-
-    def save(self, path="data/mpc_log.json"):
-        with open(path, "w") as f:
-            json.dump(self.log, f, indent=2)
+        return res.x[0] if res.success else plant.fuel

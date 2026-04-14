@@ -1,30 +1,22 @@
-# Donanım ve Paralelleştirme
-hardware:
-  num_cpu: 11
-  device: "cuda" 
+# =================================================================
+# ROTARY KILN: GÜRÜLTÜYE DAYANIKLI (ROBUST) MPC KONFİGÜRASYONU
+# =================================================================
 
-# MPC Ayarları
 mpc:
-  prediction_horizon: 20
-  # 2'den 5'e çıkardık: MPC'nin gürültüye daha esnek tepki vermesini sağlar
-  control_horizon: 5 
-  setpoint: 1450.0
+  prediction_horizon: 50  # Gürültüyü sönümlemek için daha uzak geleceğe bakıyoruz
+  control_horizon: 5      # Kontrol hamlelerini daha planlı yapıyoruz
+  setpoint: 1450.0        
+  
+  weights:
+    mse: 1.5              # Hedefe bağlılık (Hafif artırıldı)
+    smoothness: 1200.0    # ÇOK KRİTİK: Gürültüyü takip etmemesi için yakıtı ağırlaştırıyoruz
+    o2_tracking: 10.0     
+    energy: 0.01          # Ofset (sapma) oluşmaması için yakıt cezasını düşürdük
 
-# RL (PPO) Hiperparametreleri
-rl:
-  total_timesteps: 100000
-  learning_rate: 0.0003
-  # 4096'dan 2048'e düşürdük: 100k adımda 2 kat daha fazla güncelleme (update) yapar
-  n_steps: 2048 
-  batch_size: 256
-  gamma: 0.99
-  # 0.03'ten 0.1'e çıkardık: RL'in gürültüyü sönümlemek için yeterli gücü olur
-  action_limit: 0.1 
-  # Bonus: PPO'nun "sabit bir değere" çakılmasını önlemek için entropy ekle
-  ent_coef: 0.01
-
-# Dosya Yolları
 paths:
-  model_name: "models/ppo_kiln_hybrid_v2" # Versiyonu ayırmak için v2 yaptık
-  log_json: "data/final_mpc_log_v2.json"
-  results_csv: "data/hybrid_control_results_v2.csv"
+  results_csv: "data/pure_mpc_results.csv"
+
+simulation:
+  total_steps: 5000
+  initial_temp: 1400.0
+  filter_window: 5        # Sıcaklık verisini yumuşatmak için kullanılacak pencere
