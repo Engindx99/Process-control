@@ -4,7 +4,7 @@ import seaborn as sns
 import numpy as np
 import os
 
-def plot_mpc_vs_hybrid_comparison(pure_csv="data/pure_mpc_results.csv", hybrid_csv="experiments/plots/training_results.csv"):
+def plot_mpc_vs_hybrid_comparison(pure_csv="data/pure_mpc_results.csv", hybrid_csv="data/training_results.csv"):
     # 1. Veri Kontrolü
     if not os.path.exists(pure_csv) or not os.path.exists(hybrid_csv):
         print("❌ Hata: Dosyalardan biri eksik!")

@@ -7,40 +7,78 @@ import multiprocessing
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-# 1. MODÜL İMPORTLARI VE YOL KONTROLÜ
+# 1. MODÜL VE ALTYAPI KONTROLÜ
+def check_and_prepare_infrastructure():
+    """Gerekli klasörleri oluşturur ve kritik dosyaları kontrol eder."""
+    dirs = ["models", "data", "experiments/plots"]
+    for d in dirs:
+        os.makedirs(d, exist_ok=True)
+    
+    critical_files = ["src/digital_twin/dt.py", "src/rl/rl.py", "src/mpc/mpc.py"]
+    missing = [f for f in critical_files if not os.path.exists(f)]
+    if missing:
+        print(f"❌ KRİTİK HATA: Kaynak dosyalar eksik: {missing}")
+        sys.exit(1)
+    print("✅ Altyapı ve klasörler hazır.")
+
 try:
     from src.rl.rl import make_env, ResidualKilnEnv
+    from src.mpc.mpc import MPC
+    from src.digital_twin.dt import RotaryKilnDigitalTwin
 except ModuleNotFoundError:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    if current_dir not in sys.path:
-        sys.path.append(current_dir)
-    try:
-        from src.rl.rl import make_env, ResidualKilnEnv
-    except ModuleNotFoundError:
-        print("❌ HATA: 'src' klasörü bulunamadı. Lütfen 'Rotary_klin' dizininde olduğunuzdan emin olun.")
-        sys.exit(1)
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from src.rl.rl import make_env, ResidualKilnEnv
+    from src.mpc.mpc import MPC
+    from src.digital_twin.dt import RotaryKilnDigitalTwin
 
 def load_config():
-    """Yapılandırma dosyasını kökte veya config/ klasöründe arar."""
-    possible_paths = ["config.yaml", "config/config.yaml"]
-    for path in possible_paths:
-        if os.path.exists(path):
-            with open(path, 'r') as f:
-                return yaml.safe_load(f)
-    raise FileNotFoundError(f"❌ Yapılandırma dosyası bulunamadı!")
+    paths = ["config.yaml", "config/config.yaml"]
+    for p in paths:
+        if os.path.exists(p):
+            with open(p, 'r') as f: return yaml.safe_load(f)
+    raise FileNotFoundError("❌ config.yaml bulunamadı!")
+
+def generate_pure_mpc_benchmark(config, path="data/pure_mpc_results.csv"):
+    """Eğer yoksa, kıyaslama için saf MPC verilerini üretir."""
+    if os.path.exists(path):
+        print(f"✅ Saf MPC verisi mevcut: {path}")
+        return
+    
+    print("🚀 Saf MPC Benchmark süreci başlatıldı (Veri üretiliyor)...")
+    plant = RotaryKilnDigitalTwin()
+    mpc = MPC(config)
+    history = []
+    
+    for i in range(3000):
+        u_mpc = mpc.optimize(plant)
+        temp, o2, _ = plant.step(u_mpc, 1000.0)
+        error = temp - 1450
+        
+        history.append({
+            "step": i, 
+            "temp": temp, 
+            "fuel": u_mpc, 
+            "o2": o2, 
+            "error": error
+        })
+
+        # --- LOGLAMA EKRANI ---
+        if i % 100 == 0:  # Her 100 adımda bir durum raporu ver
+            status = "YÜKSELİYOR" if error < -5 else "DENGELİ" if abs(error) < 5 else "YÜKSEK"
+            print(f"Step: {i:4d} | Sıcaklık: {temp:7.2f}°C | Hata: {error:6.2f}°C | Yakıt: {u_mpc:5.2f} | Durum: {status}")
+    
+    pd.DataFrame(history).to_csv(path, index=False)
+    print(f"\n✅ Saf MPC benchmark tamamlandı ve '{path}' dosyasına kaydedildi.")
 
 def run_final_test(model, config, n_steps=3000):
-    """Eğitim bittiğinde ajanın performansını test eder ve verileri toplar."""
-    print(f"📊 Test sürüşü başlatılıyor ({n_steps} adım)...")
+    print(f"📊 Hibrit Test sürüşü başlatılıyor ({n_steps} adım)...")
     test_env = ResidualKilnEnv(config)
     obs, _ = test_env.reset()
-    
     history = []
+    
     for i in range(n_steps):
-        # Deterministic=True: Eğitimdeki rastgeleliği kapat, en iyi hamleyi yap
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, _ = test_env.step(action)
-        
         history.append({
             "step": i,
             "temp": test_env.plant.temp,
@@ -50,79 +88,50 @@ def run_final_test(model, config, n_steps=3000):
             "residual_fuel": float(action[0]) * config['rl']['action_limit']
         })
         if terminated or truncated: break
-    
     return pd.DataFrame(history)
 
 # =================================================================
-# ANA AKIŞ (MAIN EXECUTION)
+# ANA AKIŞ
 # =================================================================
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-
-    # 1. Yapılandırmayı Yükle
-    try:
-        config = load_config()
-    except Exception as e:
-        print(f"❌ Yapılandırma hatası: {e}")
-        sys.exit(1)
-
-    total_steps = config['rl'].get('total_timesteps', 100000)
-    model_path = config['paths']['model_save_path']
+    check_and_prepare_infrastructure()
     
-    print(f"🚀 --- Döner Fırın Hibrit Kontrol Sistemi ---")
-    print(f"📍 Hedef: {total_steps} Adım | Çekirdek: {config['hardware']['num_cpu']}")
+    config = load_config()
+    model_path = config['paths']['model_save_path']
+    total_steps = config['rl'].get('total_timesteps', 100000)
 
-    # 2. Klasörleri Otomatik Oluştur
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("experiments/plots", exist_ok=True)
+    # 1. Eksikse Saf MPC Verisini Üret (Benchmark)
+    generate_pure_mpc_benchmark(config)
 
-    # 3. Paralel Ortamları Başlat
+    # 2. Paralel Ortamı Kur
     env = SubprocVecEnv([make_env(config) for _ in range(config['hardware']['num_cpu'])])
 
-    # 4. Model Kontrolü ve Koşullu Eğitim
+    # 3. Model Kontrol / Eğitim
     if os.path.exists(model_path + ".zip"):
-        # MODEL VARSA: Yükle ve eğitimi atla
-        print(f"✅ Kayıtlı model bulundu: {model_path}.zip")
-        print("🚀 Eğitim atlanıyor, doğrudan teste geçiliyor...")
+        print(f"✅ Model bulundu, yükleniyor: {model_path}")
         model = PPO.load(model_path, env=env)
     else:
-        # MODEL YOKSA: PPO'yu tanımla ve eğit
-        print(f"🔍 Model bulunamadı. Sıfırdan eğitime başlanıyor...")
-        model = PPO(
-            "MlpPolicy",
-            env,
-            verbose=1,
-            learning_rate=config['rl']['learning_rate'],
-            n_steps=config['rl']['n_steps'],
-            batch_size=config['rl']['batch_size'],
-            gamma=config['rl']['gamma'],
-            device=config['hardware']['device']
-        )
+        print("🔍 Model bulunamadı, sıfırdan eğitime başlanıyor...")
+        model = PPO("MlpPolicy", env, verbose=1, 
+                    learning_rate=config['rl']['learning_rate'],
+                    n_steps=config['rl']['n_steps'],
+                    batch_size=config['rl']['batch_size'],
+                    gamma=config['rl']['gamma'],
+                    device=config['hardware']['device'])
         try:
-            print(f"🧠 Sinir ağı eğitiliyor... Lütfen bekleyin.")
             model.learn(total_timesteps=total_steps)
             model.save(model_path)
-            print(f"✅ Eğitim tamamlandı ve model kaydedildi.")
         except KeyboardInterrupt:
-            print("\n🛑 Eğitim durduruldu. Mevcut durum kaydediliyor...")
+            print("\n🛑 Eğitim durduruldu, mevcut durum kaydediliyor...")
             model.save(model_path)
 
-    # 5. SONUÇLARIN KAYDI VE TEST (3000 ADIM)
+    # 4. Hibrit Sonuçları Üret
     try:
-        # Adım sayısını config'den al (total_steps: 3000)
-        test_duration = config['simulation'].get('total_steps', 3000)
-        df_results = run_final_test(model, config, n_steps=test_duration)
-        
-        # CSV Kaydı
-        results_path = "experiments/plots/training_results.csv"
-        df_results.to_csv(results_path, index=False)
-        
-        print(f"📈 Detaylı test verileri '{results_path}' dosyasına kaydedildi.")
-        print(f"✨ İşlem başarıyla tamamlandı.")
-
-    except Exception as e:
-        print(f"❌ Test sırasında bir hata oluştu: {e}")
-    
+        df_hybrid = run_final_test(model, config)
+        df_hybrid.to_csv("data/training_results.csv", index=False)
+        print("📈 Hibrit test verileri kaydedildi: data/training_results.csv")
+        print("✨ Tüm veriler hazır. Artık karşılaştırma grafiğini çizebilirsin!")
     finally:
         env.close()
         print("🏁 Sistem kapatıldı.")
