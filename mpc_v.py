@@ -27,7 +27,7 @@ def plot_pure_mpc_results(csv_path="data/pure_mpc_results.csv"):
     ax1.grid(True, alpha=0.3)
 
     # --- ALT PANEL: YAKIT AKIŞI ---
-    ax2.plot(df['step'], df['fuel'], label='Yakıt Akışı (m³/h)', color='#2ca02c', linewidth=1.2)
+    ax2.plot(df['step'], df['fuel'], label='Yakıt Akışı (m³/h)', color='gold', linewidth=1.2)
     
     ax2.set_ylabel("Yakıt (m³/h)", fontsize=12)
     ax2.set_xlabel("Zaman Adımı (Step)", fontsize=12)

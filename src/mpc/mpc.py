@@ -3,22 +3,30 @@ from scipy.optimize import minimize
 import copy
 
 class MPC:
-    def __init__(self, prediction_horizon=60, control_horizon=8):
-        self.prediction_horizon = prediction_horizon
-        self.control_horizon = control_horizon
-        self.setpoint = 1450.0
+    def __init__(self, cfg):
+        """
+        Config sözlüğünü (cfg) alarak parametreleri yükler.
+        """
+        # Ufuk Ayarları
+        self.prediction_horizon = cfg['mpc']['prediction_horizon']
+        self.control_horizon = cfg['mpc']['control_horizon']
+        self.setpoint = cfg['mpc']['setpoint']
         
-        # Limitler
+        # Ağırlıklar (Weights)
+        self.w_mse = cfg['mpc']['weights']['mse']
+        self.w_smooth = cfg['mpc']['weights']['smoothness']
+        self.w_o2 = cfg['mpc']['weights']['o2_tracking']
+        self.w_energy = cfg['mpc']['weights']['energy']
+        
+        # Fiziksel Limitler
         self.fuel_min = 12.0
         self.fuel_max = 22.0
-        self.max_delta_u = 0.12 
+        self.max_delta_u = 0.15  # Manevra kabiliyetini hafif artırdık
 
     def internal_predict(self, current_temp, current_o2, fuel, fan):
         """
-        Dışarıdaki dt.py'ye muhtaç kalmadan, fırın fiziğini 
-        MPC'nin içinde simüle eden gizli fonksiyon.
+        Fırın fiziğini MPC içinde simüle eden iç model.
         """
-        # Digital Twin ile aynı fiziksel parametreler
         thermal_mass = 0.35
         heat_gain_factor = 20.0
         T_env = 25.0
@@ -31,18 +39,17 @@ class MPC:
         T_k = current_temp + 273.15
         T_env_k = T_env + 273.15
 
-        # Yanma Verimi Denklemi
+        # Yanma Verimi
         comb_eff = (0.6 + 0.4 * np.exp(-0.5 * ((pred_o2 - 3.0) / 1.8) ** 2))
-        
         heat_gain = fuel * heat_gain_factor * comb_eff + 60.0
         
-        # Kayıplar (Konveksiyon + Radyasyon)
+        # Kayıplar
         h_loss_conv = (0.005 + 0.00025 * fan) * (current_temp - T_env)
         h_loss_rad = (0.85 * 5.67e-12 * 7.0 * (T_k**4 - T_env_k**4)) / 5e8
 
         net_heat = np.clip(heat_gain - h_loss_conv - h_loss_rad, -300, 300)
         
-        # Fiziksel Düzeltme (Empirical part)
+        # Ampirik Düzeltme
         target_temp = 1450 * np.exp(-0.5 * ((pred_o2 - 3.0) / 1.2) ** 2)
         dT = (0.95 * net_heat + 0.01 * (target_temp - current_temp))
         
@@ -60,26 +67,28 @@ class MPC:
         last_u = current_fuel
 
         for i in range(self.prediction_horizon):
-            # Kendi iç modelimizi kullanıyoruz, AttributeError almazsın!
             temp_sim, o2_sim = self.internal_predict(temp_sim, o2_sim, u_full[i], 1000.0)
             
-            # 1. Hedef Takip (Hata Payı)
-            # Gecikmeyi (12 adım) kompanse etmek için 12. adımdan sonrasına daha çok odaklan
-            weight = 10.0 if i > 12 else 1.0
-            cost += weight * (temp_sim - self.setpoint)**2 
+            # 1. Hedef Takip (MSE)
+            # Gecikme telafisi: 12. adımdan sonra ağırlık artar
+            delay_multiplier = 5.0 if i > 12 else 1.0
+            cost += self.w_mse * delay_multiplier * (temp_sim - self.setpoint)**2 
 
-            # 2. O2 Kısıtı
-            if o2_sim < 2.8: cost += 2000.0 * (2.8 - o2_sim)**2
+            # 2. O2 Kısıtı (Tracking)
+            if o2_sim < 3.0: 
+                cost += self.w_o2 * (3.0 - o2_sim)**2
 
-            # 3. Yakıt Değişim Cezası (Smoothness)
+            # 3. Enerji Maliyeti (Energy)
+            cost += self.w_energy * (u_full[i]**2)
+
+            # 4. Yakıt Değişim Cezası (Smoothness)
             if i < self.control_horizon:
-                cost += 481.0 * (u_full[i] - last_u)**2
+                cost += self.w_smooth * (u_full[i] - last_u)**2
                 last_u = u_full[i]
 
         return cost
 
     def optimize(self, plant):
-        # Sadece mevcut değerleri alıyoruz, plant'in metodlarını çağırmıyoruz
         plant_state = (plant.temp, plant.o2, plant.fuel)
         
         u0 = np.full(self.control_horizon, plant.fuel)
@@ -91,7 +100,7 @@ class MPC:
             args=(plant_state,),
             method='SLSQP',
             bounds=bounds,
-            options={'ftol': 1e-3}
+            options={'ftol': 1e-4, 'disp': False}
         )
 
         return res.x[0] if res.success else plant.fuel

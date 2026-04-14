@@ -1,64 +1,127 @@
 import os
+import sys
 import yaml
 import pandas as pd
 import numpy as np
+import multiprocessing
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
-from src.digital_twin.dt import RotaryKilnDigitalTwin
-from src.mpc.mpc import MPC
+# 1. MODÜL İMPORTLARI VE YOL KONTROLÜ
+try:
+    from src.rl.rl import make_env, ResidualKilnEnv
+except ModuleNotFoundError:
+    # Eğer PYTHONPATH ayarlanmadıysa manuel eklemeyi dene
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in sys.path:
+        sys.path.append(current_dir)
+    try:
+        from src.rl.rl import make_env, ResidualKilnEnv
+    except ModuleNotFoundError:
+        print("❌ HATA: 'src' klasörü bulunamadı. Lütfen 'Rotary_klin' dizininde olduğunuzdan emin olun.")
+        sys.exit(1)
 
 def load_config():
-    with open("config.yaml", "r") as f:
-        return yaml.safe_load(f)
+    """Yapılandırma dosyasını kökte veya config/ klasöründe arar."""
+    possible_paths = ["config.yaml", "config/config.yaml"]
+    for path in possible_paths:
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                return yaml.safe_load(f)
+    raise FileNotFoundError(f"❌ Yapılandırma dosyası bulunamadı! Aranan konumlar: {possible_paths}")
 
-def run_robust_mpc_test(steps=5000):
-    cfg = load_config()
-    os.makedirs("data", exist_ok=True)
-
-    plant = RotaryKilnDigitalTwin()
-    mpc = MPC(
-        prediction_horizon=cfg['mpc']['prediction_horizon'],
-        control_horizon=cfg['mpc']['control_horizon']
-    )
-    mpc.setpoint = cfg['mpc']['setpoint']
-    
-    # Filtreleme için geçmiş verileri tutan liste
-    temp_buffer = []
-    filter_window = cfg['simulation'].get('filter_window', 5)
+def run_final_test(model, config, n_steps=1000):
+    """Eğitim bittiğinde ajanın performansını test eder ve verileri toplar."""
+    print(f"📊 Test sürüşü başlatılıyor ({n_steps} adım)...")
+    test_env = ResidualKilnEnv(config)
+    obs, _ = test_env.reset()
     
     history = []
-    print(f"🛡️ Gürültüye Dayanıklı MPC Testi Başlıyor... (Horizon: {cfg['mpc']['prediction_horizon']})")
-
-    for i in range(steps):
-        # 1. Ham veriyi al ve filtrele (Low-pass filter mantığı)
-        current_temp = plant.temp
-        temp_buffer.append(current_temp)
-        if len(temp_buffer) > filter_window:
-            temp_buffer.pop(0)
-        
-        # MPC'ye "filtrelenmiş" sıcaklığı veriyoruz
-        filtered_temp = sum(temp_buffer) / len(temp_buffer)
-        
-        # 2. MPC Optimizasyonu (Filtrelenmiş bilgiyle)
-        u_mpc = mpc.optimize(plant) 
-        
-        # 3. Gerçek dünyaya (plant) aksiyonu uygula
-        # Not: plant.step içinde kendi gürültüsü zaten var
-        temp, o2, _ = plant.step(u_mpc, 1000.0)
+    for i in range(n_steps):
+        # Deterministic=True: Eğitimdeki rastgeleliği kapat, en iyi hamleyi yap
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, terminated, truncated, _ = test_env.step(action)
         
         history.append({
             "step": i,
-            "temp": float(temp),
-            "filtered_temp": float(filtered_temp),
-            "fuel": float(u_mpc),
-            "error": float(temp - mpc.setpoint)
+            "temp": test_env.plant.temp,
+            "fuel": test_env.plant.fuel,
+            "o2": test_env.plant.o2,
+            "reward": reward,
+            "residual_fuel": float(action[0]) * config['rl']['action_limit']
         })
+        if terminated or truncated: break
+    
+    return pd.DataFrame(history)
 
-        if i % 500 == 0:
-            print(f"Adım: {i} | Filtreli Isı: {filtered_temp:.1f}°C | Yakıt: {u_mpc:.2f}")
-
-    df = pd.DataFrame(history)
-    df.to_csv(cfg['paths']['results_csv'], index=False)
-    print(f"✅ Bitti. MAE: {df['error'].abs().mean():.2f}")
-
+# =================================================================
+# ANA AKIŞ (MAIN EXECUTION)
+# =================================================================
 if __name__ == "__main__":
-    run_robust_mpc_test()
+    # Windows Multiprocessing Desteği (Kritik!)
+    multiprocessing.freeze_support()
+
+    # 1. Yapılandırmayı Yükle
+    try:
+        config = load_config()
+    except Exception as e:
+        print(e)
+        sys.exit(1)
+
+    total_steps = config['rl'].get('total_timesteps', 100000)
+    
+    print(f"🚀 --- Döner Fırın Hibrit Eğitimi Hazırlığı ---")
+    print(f"📍 Hedef: {total_steps} Adım | Çekirdek: {config['hardware']['num_cpu']}")
+    print(f"📍 Cihaz: {config['hardware']['device']}")
+
+    # 2. Klasörleri Otomatik Oluştur
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+
+    # 3. Paralel Ortamları (SubprocVecEnv) Başlat
+    # Her çekirdek için bir ResidualKilnEnv örneği oluşturulur
+    env = SubprocVecEnv([make_env(config) for _ in range(config['hardware']['num_cpu'])])
+
+    # 4. PPO Algoritmasını Tanımla
+    model = PPO(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        learning_rate=config['rl']['learning_rate'],
+        n_steps=config['rl']['n_steps'],
+        batch_size=config['rl']['batch_size'],
+        gamma=config['rl']['gamma'],
+        device=config['hardware']['device']
+    )
+
+    # 5. Daha Önce Kaydedilmiş Model Varsa Yükle (Eğitimi Sürdür)
+    model_path = config['paths']['model_save_path']
+    if os.path.exists(model_path + ".zip"):
+        print(f"🔄 Mevcut model ({model_path}.zip) bulundu, üzerine eğitim devam ediyor...")
+        model = PPO.load(model_path, env=env)
+    
+    # 6. EĞİTİM DÖNGÜSÜ
+    try:
+        print(f"🧠 Sinir ağı eğitiliyor... Lütfen bekleyin.")
+        model.learn(total_timesteps=total_steps)
+        
+        # Modeli Kaydet
+        model.save(model_path)
+        print(f"✅ Model başarıyla kaydedildi: {model_path}")
+
+        # 7. SONUÇLARIN KAYDI VE TEST
+        df_results = run_final_test(model, config)
+        df_results.to_csv("data/training_results.csv", index=False)
+        print("📈 Detaylı test verileri 'data/training_results.csv' dosyasına kaydedildi.")
+
+    except KeyboardInterrupt:
+        print("\n🛑 Eğitim kullanıcı tarafından durduruldu (Ctrl+C). Mevcut ilerleme kaydediliyor...")
+        model.save(model_path)
+    
+    except Exception as e:
+        print(f"❌ Beklenmedik bir hata oluştu: {e}")
+    
+    finally:
+        # Alt işlemleri kapat ve belleği temizle
+        env.close()
+        print("🏁 İşlem tamamlandı.")

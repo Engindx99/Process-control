@@ -1,22 +1,28 @@
-# =================================================================
-# ROTARY KILN: GÜRÜLTÜYE DAYANIKLI (ROBUST) MPC KONFİGÜRASYONU
-# =================================================================
-
 mpc:
-  prediction_horizon: 50  # Gürültüyü sönümlemek için daha uzak geleceğe bakıyoruz
-  control_horizon: 5      # Kontrol hamlelerini daha planlı yapıyoruz
-  setpoint: 1450.0        
-  
+  prediction_horizon: 50
+  control_horizon: 5
+  setpoint: 1450.0
   weights:
-    mse: 1.5              # Hedefe bağlılık (Hafif artırıldı)
-    smoothness: 1200.0    # ÇOK KRİTİK: Gürültüyü takip etmemesi için yakıtı ağırlaştırıyoruz
-    o2_tracking: 10.0     
-    energy: 0.01          # Ofset (sapma) oluşmaması için yakıt cezasını düşürdük
+    mse: 1.0
+    smoothness: 484.0
+    o2_tracking: 2000.0
+    energy: 0.01
 
-paths:
-  results_csv: "data/pure_mpc_results.csv"
+rl:
+  total_timesteps: 100000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  gamma: 0.99
+  action_limit: 0.1
 
 simulation:
-  total_steps: 5000
   initial_temp: 1400.0
-  filter_window: 5        # Sıcaklık verisini yumuşatmak için kullanılacak pencere
+  total_steps: 5000
+
+hardware:
+  num_cpu: 11
+  device: "cpu"  # Veya "cuda"
+
+paths:
+  model_save_path: "models/ppo_kiln_residual_v1"
