@@ -13,7 +13,7 @@ mpc:
     energy: 0.01
 
 rl:
-  total_timesteps: 200000
+  total_timesteps: 0
   learning_rate: 0.0003 
   n_steps: 2048           # <-- Artırdık (Daha fazla veri görüp karar versin)
   batch_size: 512         # <-- Artırdık (Gradyan güncellemeleri daha stabil olsun)
