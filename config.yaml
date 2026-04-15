@@ -1,28 +1,28 @@
+hardware:
+  num_cpu: 11
+  device: "auto"
+
 mpc:
-  prediction_horizon: 50
-  control_horizon: 5
+  prediction_horizon: 20
+  control_horizon: 2   
   setpoint: 1450.0
   weights:
-    mse: 1.0
-    smoothness: 484.0
-    o2_tracking: 2000.0
+    mse: 1.5              
+    smoothness: 500.0     
+    o2_tracking: 130.0    
     energy: 0.01
 
 rl:
-  total_timesteps: 100000
-  learning_rate: 0.0003
-  n_steps: 2048
-  batch_size: 128
+  total_timesteps: 200000
+  learning_rate: 0.0003 
+  n_steps: 2048           # <-- Artırdık (Daha fazla veri görüp karar versin)
+  batch_size: 512         # <-- Artırdık (Gradyan güncellemeleri daha stabil olsun)
   gamma: 0.99
-  action_limit: 0.1
+  action_limit: 0.18      # <-- Çok az kıstık (Sistemi aşırı sarsmasın)
 
 simulation:
   initial_temp: 1400.0
   total_steps: 3000
 
-hardware:
-  num_cpu: 11
-  device: "cpu"  # Veya "cuda"
-
 paths:
-  model_save_path: "models/ppo_kiln_residual_v1"
+  model_save_path: "models/ppo_kiln_residual_mimo_v2"

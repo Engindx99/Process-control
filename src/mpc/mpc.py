@@ -1,106 +1,85 @@
 import numpy as np
 from scipy.optimize import minimize
-import copy
 
 class MPC:
-    def __init__(self, cfg):
-        """
-        Config sözlüğünü (cfg) alarak parametreleri yükler.
-        """
-        # Ufuk Ayarları
-        self.prediction_horizon = cfg['mpc']['prediction_horizon']
-        self.control_horizon = cfg['mpc']['control_horizon']
-        self.setpoint = cfg['mpc']['setpoint']
+    def __init__(self, config=None):
+        self.config = config
         
-        # Ağırlıklar (Weights)
-        self.w_mse = cfg['mpc']['weights']['mse']
-        self.w_smooth = cfg['mpc']['weights']['smoothness']
-        self.w_o2 = cfg['mpc']['weights']['o2_tracking']
-        self.w_energy = cfg['mpc']['weights']['energy']
+        # DT Parametreleri
+        self.thermal_mass = 0.05
+        self.heat_gain_factor = 20.0
+        self.phys_weight = 0.95
+        self.emp_weight = 0.01
         
-        # Fiziksel Limitler
-        self.fuel_min = 12.0
-        self.fuel_max = 22.0
-        self.max_delta_u = 0.15  # Manevra kabiliyetini hafif artırdık
+        # MPC Ayarları
+        self.horizon = 6  # Tahmin ufkunu bir tık artırdık
+        self.last_fuel = 16.5
+        self.last_fan = 1020.0
 
-    def internal_predict(self, current_temp, current_o2, fuel, fan):
-        """
-        Fırın fiziğini MPC içinde simüle eden iç model.
-        """
-        thermal_mass = 0.35
-        heat_gain_factor = 20.0
-        T_env = 25.0
+    def internal_predict(self, temp, o2, fuel, fan):
+        T_k = temp + 273.15
+        T_env_k = 25.0 + 273.15
         
-        # O2 Tahmini
-        target_o2 = np.clip((11.6 - 0.40 * fuel) * 0.7 + ((fan / 1000.0) * 14.0 - fuel * 0.58) * 0.3, 1.5, 8.5)
-        pred_o2 = current_o2 + 0.18 * (target_o2 - current_o2)
+        base_o2 = 11.6 - 0.40 * fuel
+        physical_o2 = (fan / 1000.0) * 14.0 - fuel * 0.58
+        pred_o2 = np.clip(0.7 * base_o2 + 0.3 * physical_o2, 1.5, 8.5)
 
-        # Sıcaklık Tahmini
-        T_k = current_temp + 273.15
-        T_env_k = T_env + 273.15
-
-        # Yanma Verimi
-        comb_eff = (0.6 + 0.4 * np.exp(-0.5 * ((pred_o2 - 3.0) / 1.8) ** 2))
-        heat_gain = fuel * heat_gain_factor * comb_eff + 60.0
+        comb_eff = 0.6 + 0.4 * np.exp(-0.5 * ((pred_o2 - 3.0) / 1.8) ** 2)
+        heat_gain = (fuel * self.heat_gain_factor * comb_eff) + 60.0
         
-        # Kayıplar
-        h_loss_conv = (0.005 + 0.00025 * fan) * (current_temp - T_env)
-        h_loss_rad = (0.85 * 5.67e-12 * 7.0 * (T_k**4 - T_env_k**4)) / 5e8
-
-        net_heat = np.clip(heat_gain - h_loss_conv - h_loss_rad, -300, 300)
+        heat_loss_conv = (0.005 + 0.00025 * fan) * (temp - 25.0)
+        heat_loss_rad = (0.85 * 5.67e-12 * 7.0 * (T_k**4 - T_env_k**4)) / 5e8
         
-        # Ampirik Düzeltme
-        target_temp = 1450 * np.exp(-0.5 * ((pred_o2 - 3.0) / 1.2) ** 2)
-        dT = (0.95 * net_heat + 0.01 * (target_temp - current_temp))
+        net_heat = np.clip(heat_gain - heat_loss_conv - heat_loss_rad, -300, 300)
+        target_temp_emp = 1450 * np.exp(-0.5 * ((pred_o2 - 3.0) / 1.2) ** 2)
         
-        pred_temp = current_temp + thermal_mass * dT
-        return pred_temp, pred_o2
+        dT = self.phys_weight * net_heat + self.emp_weight * (target_temp_emp - temp)
+        return temp + self.thermal_mass * dT, pred_o2
 
-    def cost_function(self, u_sequence, plant_state):
-        temp_sim, o2_sim, current_fuel = plant_state
-        
-        u_full = np.ones(self.prediction_horizon)
-        u_full[:self.control_horizon] = u_sequence
-        u_full[self.control_horizon:] = u_sequence[-1]
-
+    def cost_function(self, u, current_temp, current_o2, last_u_fuel, last_u_fan):
+        temp_sim, o2_sim = current_temp, current_o2
         cost = 0
-        last_u = current_fuel
+        fuel_steps = u[:self.horizon]
+        fan_steps = u[self.horizon:]
 
-        for i in range(self.prediction_horizon):
-            temp_sim, o2_sim = self.internal_predict(temp_sim, o2_sim, u_full[i], 1000.0)
+        for i in range(self.horizon):
+            temp_sim, o2_sim = self.internal_predict(temp_sim, o2_sim, fuel_steps[i], fan_steps[i])
             
-            # 1. Hedef Takip (MSE)
-            # Gecikme telafisi: 12. adımdan sonra ağırlık artar
-            delay_multiplier = 5.0 if i > 12 else 1.0
-            cost += self.w_mse * delay_multiplier * (temp_sim - self.setpoint)**2 
-
-            # 2. O2 Kısıtı (Tracking)
-            if o2_sim < 3.0: 
-                cost += self.w_o2 * (3.0 - o2_sim)**2
-
-            # 3. Enerji Maliyeti (Energy)
-            cost += self.w_energy * (u_full[i]**2)
-
-            # 4. Yakıt Değişim Cezası (Smoothness)
-            if i < self.control_horizon:
-                cost += self.w_smooth * (u_full[i] - last_u)**2
-                last_u = u_full[i]
-
+            # 1. HATA CEZASI (Artırıldı - Hedefe odaklanma)
+            cost += 5.0 * (temp_sim - 1450)**2   
+            cost += 20.0 * (o2_sim - 3.0)**2     
+            
+            # 2. YUMUŞATMA CEZASI (Düşürüldü - Daha atik hareket için)
+            if i == 0:
+                cost += 2.0 * (fuel_steps[i] - last_u_fuel)**2 
+                cost += 0.05 * (fan_steps[i] - last_u_fan)**2
+            else:
+                cost += 1.0 * (fuel_steps[i] - fuel_steps[i-1])**2 
+                cost += 0.02 * (fan_steps[i] - fan_steps[i-1])**2
+                
         return cost
 
     def optimize(self, plant):
-        plant_state = (plant.temp, plant.o2, plant.fuel)
+        current_temp = plant.temp
+        current_o2 = plant.o2
+        self.last_fuel = plant.fuel
+        self.last_fan = plant.fan
         
-        u0 = np.full(self.control_horizon, plant.fuel)
-        bounds = [(self.fuel_min, self.fuel_max)] * self.control_horizon
-
+        initial_guess = np.concatenate([
+            [self.last_fuel] * self.horizon, 
+            [self.last_fan] * self.horizon
+        ])
+        
+        # Sınırları biraz daha esnetebiliriz gerekirse
+        bounds = [(12.0, 22.0)] * self.horizon + [(950.0, 1100.0)] * self.horizon
+        
         res = minimize(
             self.cost_function, 
-            u0, 
-            args=(plant_state,),
-            method='SLSQP',
-            bounds=bounds,
-            options={'ftol': 1e-4, 'disp': False}
+            initial_guess, 
+            args=(current_temp, current_o2, self.last_fuel, self.last_fan),
+            method='SLSQP', 
+            bounds=bounds, 
+            options={'ftol': 1e-3, 'maxiter': 5}
         )
-
-        return res.x[0] if res.success else plant.fuel
+        
+        return float(res.x[0]), float(res.x[self.horizon])

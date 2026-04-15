@@ -1,11 +1,11 @@
 import numpy as np
 import pandas as pd
 import pickle
+import os
 
 
 class RotaryKilnDigitalTwin:
     def __init__(self):
-        # ---------------- STATE ----------------
         self.temp = 1400.0
         self.o2 = 4.0
         self.fuel = 16.0
@@ -16,50 +16,40 @@ class RotaryKilnDigitalTwin:
         self.data = []
         self.fuel_history = [self.fuel] * 12
 
-        # ---------------- PHYSICS PARAMETERS ----------------
-        self.thermal_mass = 0.05
-        self.heat_gain_factor = 20.0
+        self.thermal_mass = 0.002
+        self.heat_gain_factor = 26
 
-        self.conv_factor = 0.00025
+        self.conv_factor = 0.00035
         self.rad_factor = 5.67e-12
         self.emissivity = 0.85
         self.area_scale = 7.0
 
-        self.phys_weight = 0.95
-        self.emp_weight = 0.01
+        self.phys_weight = 0.98
+        self.emp_weight = 0.005
 
-    # ---------------- O2 MODEL ----------------
     def calculate_o2(self, fuel, fan):
         base_o2 = 11.6 - 0.40 * fuel
         physical_o2 = (fan / 1000.0) * 14.0 - fuel * 0.58
-
         o2 = 0.7 * base_o2 + 0.3 * physical_o2
         return np.clip(o2, 1.5, 8.5)
 
-    # ---------------- COMBUSTION ----------------
     def combustion_eff(self, o2):
         return 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.0) / 1.8) ** 2)
 
-    # ---------------- STEP ----------------
     def step(self, fuel, fan):
 
-        # ---------------- INPUT LIMITS ----------------
         self.fuel = np.clip(fuel, 12.0, 22.0)
         self.fan = np.clip(fan, 950.0, 1100.0)
 
-        # ---------------- DELAY ----------------
         self.fuel_history.append(self.fuel)
         delayed_fuel = self.fuel_history.pop(0)
 
-        # ---------------- O2 DYNAMICS ----------------
         target_o2 = self.calculate_o2(self.fuel, self.fan)
-        self.o2 += 0.18 * (target_o2 - self.o2)
+        self.o2 += 0.15 * (target_o2 - self.o2)
 
-        # ---------------- TEMPERATURE STATE ----------------
         T_k = self.temp + 273.15
         T_env_k = self.T_env + 273.15
 
-        # ---------------- COMBUSTION ----------------
         base_eff = self.combustion_eff(self.o2)
 
         air_fuel_ratio = self.fan / (self.fuel + 1e-6)
@@ -68,32 +58,31 @@ class RotaryKilnDigitalTwin:
         comb_eff = base_eff * (0.9 + 0.1 * afr_eff)
 
         heat_gain = delayed_fuel * self.heat_gain_factor * comb_eff
-        heat_gain += 60.0
-        heat_gain = np.clip(heat_gain, 0, 1000)
+        bias_heat = 30 + 0.02 * (1450 - self.temp)
+        heat_gain += bias_heat
+        heat_gain = np.clip(heat_gain, 0, 900)
 
-        # ---------------- LOSSES ----------------
-        # convection
-        heat_loss_conv = (0.005 + self.conv_factor * self.fan) * (self.temp - self.T_env)
+        heat_loss_conv = (0.01 + self.conv_factor * self.fan) * (self.temp - self.T_env)
 
-        # excess oxygen cooling
         excess_o2 = max(0.0, self.o2 - 3.0)
-        temp_factor = 0.3 + 0.7 * np.tanh(self.temp / 1200.0)
+        heat_loss_conv += excess_o2 * 0.002 * (self.temp - self.T_env)
 
-        heat_loss_conv += excess_o2 * 0.0015 * temp_factor * (self.temp - self.T_env)
-
-        # radiation
         heat_loss_rad = (
             self.emissivity *
             self.rad_factor *
             self.area_scale *
             (T_k**4 - T_env_k**4)
-        ) / 5e8
+        ) / 3e8
 
-        # ---------------- ENERGY BALANCE ----------------
-        net_heat = heat_gain - heat_loss_conv - heat_loss_rad
-        net_heat = np.clip(net_heat, -300, 300)
+        total_loss = heat_loss_conv + heat_loss_rad
 
-        # ---------------- SOFT PHYSICS CORRECTION ----------------
+        net_heat = heat_gain - total_loss
+
+        if self.temp > 1500:
+            net_heat -= (self.temp - 1500) * 2.5
+
+        net_heat = np.clip(net_heat, -250, 250)
+
         target_temp = 1450 * np.exp(-0.5 * ((self.o2 - 3.0) / 1.2) ** 2)
 
         dT = (
@@ -102,18 +91,14 @@ class RotaryKilnDigitalTwin:
         )
 
         self.temp += self.thermal_mass * dT
+        self.temp = np.clip(self.temp, 500, 1550)
 
-        # safety
-        self.temp = np.clip(self.temp, 0, 5000)
-
-        # ---------------- OUTPUT ----------------
         eff = np.clip(
             (1.05 - 0.00006 * self.temp) *
             np.exp(-0.5 * ((self.o2 - 3.0) / 1.2) ** 2),
             0.4, 0.98
         )
 
-        # ---------------- LOG ----------------
         self.data.append({
             "adim": self.step_count,
             "fuel": float(self.fuel),
@@ -127,12 +112,20 @@ class RotaryKilnDigitalTwin:
 
         return self.temp, self.o2, eff
 
-    # ---------------- SIMULATION ----------------
-    def run_full_simulation(self, steps=5000,
-                            csv_file="kiln_dataset.csv",
-                            pkl_file="kiln_model.pkl"):
+    def run_full_simulation(self, steps=3000):
 
-        print(f"Simülasyon başladı: {steps} adım")
+        #print(f"Simülasyon başladı: {steps} adım")
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        src_dir = os.path.dirname(current_dir)
+        dt_dir = os.path.join(src_dir, "dt")
+
+        os.makedirs(dt_dir, exist_ok=True)
+
+        csv_path = os.path.join(dt_dir, "kiln_dataset.csv")
+        pkl_path = os.path.join(dt_dir, "kiln_model.pkl")
+
+        #print("📁 Kayıt yolu:", csv_path)
 
         f_val, v_val = 16.0, 1000.0
 
@@ -142,14 +135,14 @@ class RotaryKilnDigitalTwin:
             self.step(f_val, v_val)
 
         df = pd.DataFrame(self.data)
-        df.to_csv(csv_file, index=False)
 
-        with open(pkl_file, "wb") as f:
+        df.to_csv(csv_path, index=False)
+
+        with open(pkl_path, "wb") as f:
             pickle.dump(self, f)
 
-        print("OK")
-        print(f"T: {df['sicaklik'].min():.0f} - {df['sicaklik'].max():.0f}")
-        print(f"O2: {df['o2'].min():.2f} - {df['o2'].max():.2f}")
+        #print("✅ Kayıt başarılı")
+        #print(f"T: {df['sicaklik'].min():.0f} - {df['sicaklik'].max():.0f}")
 
 
 if __name__ == "__main__":
