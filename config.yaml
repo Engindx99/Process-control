@@ -13,8 +13,8 @@ mpc:
     energy: 0.5           
 
 rl:
-  total_timesteps: 200000  
-  learning_rate: 5e-5    
+  total_timesteps: 150000  
+  learning_rate: 1e-5    
   n_steps: 4096             # Gecikmeyi ve hantallığı kavraması için artırdık
   batch_size: 512
   gamma: 0.995              # Uzun vadeli kararlılık odağı

@@ -10,7 +10,7 @@ with open("config.yaml", "r") as f:
     cfg = yaml.safe_load(f)
 
 env = make_env(cfg, seed=42, rank=0)()
-model = PPO.load("models/ppo_kiln_v5_pro_extended_3k")
+model = PPO.load("models/ppo_kiln_v5_final")
 
 obs, _ = env.reset()
 history = []
@@ -39,7 +39,7 @@ except:
     pass
 
 # Hibrit (Mavi)
-plt.plot(history, label='Yeni Hibrit (3k Extended)', color='blue', linewidth=1.5)
+plt.plot(history, label='Yeni Hibrit (3k Extended)', color='blue', linewidth=1.25)
 
 # Metrikler
 mae = np.mean(np.abs(np.array(history) - 1450))
