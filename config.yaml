@@ -3,26 +3,23 @@ hardware:
   device: "auto"
 
 mpc:
-  prediction_horizon: 20
-  control_horizon: 2   
   setpoint: 1450.0
+  prediction_horizon: 40    # 80'den 40'a çektik. 100 kütle için bu mesafe yeterli.
+  control_horizon: 3        
   weights:
-    mse: 1.5              
-    smoothness: 500.0     
-    o2_tracking: 130.0    
-    energy: 0.01
+    mse: 1.0                
+    smoothness: 2500.0      # 8000 çok fazlaydı, 2500'e çekerek MPC'ye hareket alanı verdik.
+    o2_tracking: 50.0       
+    energy: 0.5           
 
 rl:
-  total_timesteps: 0
-  learning_rate: 0.0003 
-  n_steps: 2048           # <-- Artırdık (Daha fazla veri görüp karar versin)
-  batch_size: 512         # <-- Artırdık (Gradyan güncellemeleri daha stabil olsun)
-  gamma: 0.99
-  action_limit: 0.18      # <-- Çok az kıstık (Sistemi aşırı sarsmasın)
-
-simulation:
-  initial_temp: 1400.0
-  total_steps: 3000
+  total_timesteps: 200000  
+  learning_rate: 5e-5    
+  n_steps: 4096             # Gecikmeyi ve hantallığı kavraması için artırdık
+  batch_size: 512
+  gamma: 0.995              # Uzun vadeli kararlılık odağı
+  action_limit: 0.18      
 
 paths:
-  model_save_path: "models/ppo_kiln_residual_mimo_v2"
+  model_save_path: "models/ppo_kiln_v5_final"
+  log_path: "logs/training_stats.csv"

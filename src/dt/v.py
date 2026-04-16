@@ -1,30 +1,29 @@
-import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
+df = pd.read_csv("kiln_dataset.csv")
 
-def analyze_kiln_results():
+# ---------------- PENCERE 1: SICAKLIK ----------------
+plt.figure(figsize=(12, 6))
+plt.plot(df["adim"], df["sicaklik"], linewidth=1.5)
 
-    # 📌 bulunduğun klasör = src/dt
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+plt.title("Rotary Kiln Sıcaklık Zaman Serisi")
+plt.xlabel("Adım")
+plt.ylabel("Sıcaklık (°C)")
+plt.grid(True)
 
-    file_path = os.path.join(base_dir, "kiln_dataset.csv")
+plt.show()
 
-    print("📁 Okunan dosya:", file_path)
+# ---------------- PENCERE 2: O2 + YAKIT ----------------
+plt.figure(figsize=(12, 6))
 
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(
-            f"❌ {file_path} bulunamadı. Önce simülasyonu çalıştırın."
-        )
+plt.plot(df["adim"], df["o2"], label="O2", linewidth=1.5)
+plt.plot(df["adim"], df["fuel"], label="Fuel", linewidth=1.5)
 
-    df = pd.read_csv(file_path)
+plt.title("O2 ve Yakıt Zaman Serisi")
+plt.xlabel("Adım")
+plt.ylabel("Değer")
+plt.legend()
+plt.grid(True)
 
-    plt.figure(figsize=(14, 6))
-    plt.plot(df["adim"], df["sicaklik"], label="Temp")
-    plt.axhline(1450, linestyle="--")
-    plt.legend()
-    plt.show()
-
-
-if __name__ == "__main__":
-    analyze_kiln_results()
+plt.show()
