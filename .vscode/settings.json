@@ -1,10 +1,51 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "python.defaultInterpreterPath": "python",
     "terminal.integrated.defaultProfile.windows": "Git Bash",
     "terminal.integrated.profiles.windows": {
         "Git Bash": {
             "path": "C:\\Program Files\\Git\\git-bash.exe"
         }
+    },
+    // =========================
+    // EDITOR BEHAVIOR
+    // =========================
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
+    },
+    // =========================
+    // PYTHON QUALITY TOOLING
+    // =========================
+    "python.analysis.typeCheckingMode": "basic",
+    "python.linting.enabled": true,
+    "python.linting.ruffEnabled": true,
+    "python.linting.mypyEnabled": false,
+    "python.formatting.provider": "black",
+    // =========================
+    // PERFORMANCE / TRAINING FRIENDLINESS
+    // =========================
+    "terminal.integrated.env.windows": {
+        "PYTHONUNBUFFERED": "1"
+    },
+    // =========================
+    // PROJECT SAFETY
+    // =========================
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/.pytest_cache": true
+    },
+    // =========================
+    // RL / ML LARGE PROJECT SUPPORT
+    // =========================
+    "python.analysis.extraPaths": [
+        "./src"
+    ],
+    "files.watcherExclude": {
+        "**/models/**": true,
+        "**/data/**": true,
+        "**/.git/objects/**": true
     }
 }

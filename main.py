@@ -4,84 +4,120 @@ import yaml
 import pandas as pd
 import numpy as np
 import multiprocessing
+import logging
+
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-# 1. ALTYAPI VE KLASÖR HAZIRLIĞI
+# =========================================================
+# LOGGER
+# =========================================================
+logger = logging.getLogger("ORCHESTRATOR")
+logger.setLevel(logging.INFO)
+
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("[%(asctime)s] %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+# =========================================================
+# INFRA CHECK
+# =========================================================
 def check_and_prepare_infrastructure():
-    dirs = ["models", "data", "experiments/plots"]
+    dirs = ["models", "data", "experiments/plots", "models/checkpoints"]
     for d in dirs:
         os.makedirs(d, exist_ok=True)
-    
-    critical_files = ["src/dt/dt.py", "src/rl/rl.py", "src/mpc/mpc.py"]
+
+    critical_files = [
+        "src/dt/dt.py",
+        "src/rl/rl.py",
+        "src/mpc/mpc.py"
+    ]
+
     missing = [f for f in critical_files if not os.path.exists(f)]
     if missing:
-        print(f"❌ KRİTİK HATA: Kaynak dosyalar eksik: {missing}")
+        logger.error(f"Missing critical files: {missing}")
         sys.exit(1)
-    print("✅ Altyapı hazır. Eğitim ortamı kuruluyor...")
 
-# Modül yollarını ekle ve import et
+    logger.info("Infrastructure ready")
+
+# =========================================================
+# PATH & IMPORTS
+# =========================================================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-try:
-    from src.rl.rl import make_env, ResidualKilnEnv
-    from src.mpc.mpc import MPC
-    from src.dt.dt import RotaryKilnDigitalTwin
-except ImportError as e:
-    print(f"❌ Import Hatası: {e}")
-    sys.exit(1)
 
+from src.rl.rl import make_env, ResidualKilnEnv
+from src.mpc.mpc import MPC
+from src.dt.dt import RotaryKilnDigitalTwin
+
+# =========================================================
+# CONFIG
+# =========================================================
 def load_config():
     paths = ["config.yaml", "config/config.yaml"]
     for p in paths:
         if os.path.exists(p):
-            with open(p, 'r') as f: return yaml.safe_load(f)
-    raise FileNotFoundError("❌ config.yaml bulunamadı!")
+            with open(p, "r") as f:
+                logger.info(f"Config loaded: {p}")
+                return yaml.safe_load(f)
+    raise FileNotFoundError("config.yaml not found")
 
-# 2. BENCHMARK (SAF MPC) ÜRETİMİ
+# =========================================================
+# MPC BENCHMARK (FIXED)
+# =========================================================
 def generate_pure_mpc_benchmark(config, path="data/pure_mpc_results.csv"):
-    """
-    Saf MPC performansını ölçer. 
-    Not: Bu kısım ana süreçte (tek çekirdek) çalıştığı için loglar açık kalabilir.
-    """
     if os.path.exists(path):
-        print(f"✅ Saf MPC verisi mevcut, benchmark atlanıyor: {path}")
+        logger.info(f"MPC benchmark exists -> {path}")
         return
-    
-    print("\n🚀 MPC Benchmark Başlatıldı (Yakıt & Fan Optimizasyonu)...")
-    plant = RotaryKilnDigitalTwin()
+
+    logger.info("Starting MPC benchmark")
+    plant = RotaryKilnDigitalTwin(seed=42)
     mpc = MPC(config)
     history = []
-    
+
     for i in range(3000):
-        # MPC'den aksiyon al
         u_fuel, u_fan = mpc.optimize(plant)
         
-        # Dijital ikiz üzerinde uygula
-        temp, o2, _ = plant.step(u_fuel, u_fan)
-        error = temp - 1450.0
-        
+        # --- DICTIONARY FIX ---
+        result = plant.step(u_fuel, u_fan)
+        temp = result["Temperature"]
+        o2 = result["O2"]
+        # ----------------------
+
+        error = temp - config["system"]["setpoint"]
+
         history.append({
-            "step": i, "temp": temp, "fuel": u_fuel, 
-            "fan": u_fan, "o2": o2, "error": error
+            "step": i,
+            "temp": temp,
+            "fuel": u_fuel,
+            "fan": u_fan,
+            "o2": o2,
+            "error": error
         })
 
         if i % 100 == 0:
-            print(f"Benchmark Step: {i:4d} | T: {temp:7.2f}°C | Hata: {error:6.2f} | O2: %{o2:4.2f}")
-    
-    pd.DataFrame(history).to_csv(path, index=False)
-    print("✅ Benchmark tamamlandı.\n")
+            logger.info(
+                f"[MPC] step={i} temp={temp:.2f} error={error:.2f} o2={o2:.2f}"
+            )
 
-# 3. TEST SÜRÜŞÜ (HİBRİT MODEL)
+    pd.DataFrame(history).to_csv(path, index=False)
+    logger.info("MPC benchmark completed")
+
+# =========================================================
+# TEST LOOP
+# =========================================================
 def run_final_test(model, config, n_steps=3000):
-    print(f"📊 Hibrit (MPC + RL) Test sürüşü başlatılıyor ({n_steps} adım)...")
+    logger.info(f"Running hybrid test: {n_steps} steps")
     test_env = ResidualKilnEnv(config)
-    obs, _ = test_env.reset()
+    obs, _ = test_env.reset(seed=42)
     history = []
-    
+
     for i in range(n_steps):
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, _ = test_env.step(action)
-        
+
+        # Verileri doğrudan env.plant üzerinden alıyoruz (En günceli oradadır)
         history.append({
             "step": i,
             "temp": test_env.plant.temp,
@@ -90,63 +126,76 @@ def run_final_test(model, config, n_steps=3000):
             "o2": test_env.plant.o2,
             "reward": reward
         })
-        
+
         if i % 500 == 0:
-            print(f"Test Step: {i:4d} | Hibrit T: {test_env.plant.temp:7.2f}°C")
-            
-        if terminated or truncated: break
-        
+            logger.info(f"[TEST] step={i} temp={test_env.plant.temp:.2f}")
+
+        if terminated or truncated:
+            logger.warning(f"Episode ended at step {i}")
+            break
+
     return pd.DataFrame(history)
 
-# 4. ANA ÇALIŞTIRICI
+# =========================================================
+# MAIN
+# =========================================================
 if __name__ == "__main__":
+    # Windows için çoklu işlem desteği
     multiprocessing.freeze_support()
-    check_and_prepare_infrastructure()
     
+    check_and_prepare_infrastructure()
     config = load_config()
-    model_path = config['paths']['model_save_path']
-    total_steps = config['rl'].get('total_timesteps', 200000)
 
-    # Önce Saf MPC Benchmark üret
+    model_path = config["paths"]["model_save_path"]
+    total_steps = config["rl"].get("total_timesteps", 50000)
+    seed = config["rl"].get("seed", 42)
+    np.random.seed(seed)
+
+    # 1. MPC Benchmark çalıştır
     generate_pure_mpc_benchmark(config)
 
-    # Paralel ortamı hazırla (Hız için kritik!)
-    num_cpu = config['hardware']['num_cpu']
-    print(f"⚙️  {num_cpu} çekirdek üzerinde paralel eğitim başlıyor...")
+    # 2. Ortam kurulumu (Paralel CPU)
+    num_cpu = config["hardware"]["num_cpu"]
+    logger.info(f"Starting distributed training: {num_cpu} CPUs")
     env = SubprocVecEnv([make_env(config, i) for i in range(num_cpu)])
 
-    # Model Kontrol ve Eğitim
+    # 3. Model Yükleme veya Oluşturma
     if os.path.exists(model_path + ".zip"):
-        print(f"♻️  Mevcut model yükleniyor: {model_path}")
+        logger.info(f"Loading existing model: {model_path}")
         model = PPO.load(model_path, env=env)
+        model.learning_rate = float(config["rl"]["learning_rate"])
     else:
-        print("🆕 Yeni model oluşturuluyor...")
+        logger.info("Creating new PPO model for 50k test")
         model = PPO(
-            "MlpPolicy", 
-            env, 
-            verbose=1, # SB3 Tablo logları için açık kalsın
-            learning_rate=float(config['rl']['learning_rate']),
-            n_steps=config['rl']['n_steps'],
-            batch_size=config['rl']['batch_size'],
-            gamma=config['rl']['gamma'],
-            device=config['hardware']['device']
+            "MlpPolicy",
+            env,
+            verbose=1,
+            learning_rate=float(config["rl"]["learning_rate"]),
+            n_steps=config["rl"]["n_steps"],
+            batch_size=config["rl"]["batch_size"],
+            gamma=config["rl"]["gamma"],
+            device=config["hardware"]["device"]
         )
-    
-    try:
-        if total_steps > 0:
-            print(f"🏋️  Eğitim süreci aktif: {total_steps} adım.")
-            model.learn(total_timesteps=total_steps)
-            model.save(model_path)
-            print(f"💾 Model kaydedildi: {model_path}")
-    except KeyboardInterrupt:
-        print("\n🛑 Kullanıcı tarafından durduruldu. Kaydediliyor...")
-        model.save(model_path)
 
-    # Sonuçları Kaydet
+    # 4. Eğitim
     try:
-        df_hybrid = run_final_test(model, config)
-        df_hybrid.to_csv("data/training_results.csv", index=False)
-        print("📈 Hibrit sonuçlar 'data/training_results.csv' dosyasına yazıldı.")
+        logger.info(f"Training session started for {total_steps} steps...")
+        model.learn(total_timesteps=total_steps)
+        model.save(model_path)
+        logger.info(f"Model successfully saved -> {model_path}")
+
+    except KeyboardInterrupt:
+        logger.warning("Training interrupted by user, saving progress...")
+        model.save(model_path)
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise
+
+    # 5. Final Testi ve Kayıt
+    try:
+        df_test = run_final_test(model, config)
+        df_test.to_csv("data/training_results.csv", index=False)
+        logger.info("Final hybrid test results saved to data/training_results.csv")
     finally:
         env.close()
-        print("🏁 İşlem başarıyla sonlandırıldı.")
+        logger.info("System shutdown complete.")
