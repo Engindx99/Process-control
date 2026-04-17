@@ -34,7 +34,7 @@ class RotaryKilnDigitalTwin:
         self.fuel_history = [self.fuel] * 12
 
         # ---------------- PHYSICS ----------------
-        self.thermal_mass = 100
+        self.thermal_mass = 2500
         self.heat_gain_factor = 20.88
         self.conv_factor = 0.00022
         self.rad_factor = 5.67e-12
@@ -55,7 +55,6 @@ class RotaryKilnDigitalTwin:
 
     # ---------------- STEP ----------------
     def step(self, fuel, fan):
-
         try:
             self.fuel = np.clip(fuel, 12.0, 22.0)
             self.fan = np.clip(fan, 950.0, 1100.0)
@@ -63,34 +62,32 @@ class RotaryKilnDigitalTwin:
             self.fuel_history.append(self.fuel)
             delayed_fuel = self.fuel_history.pop(0)
 
-            # ---------------- O2 ----------------
+            # --- O2 HESABI ---
             o2_target = self.calculate_o2_target(self.fuel, self.fan)
             self.o2 += 0.25 * (o2_target - self.o2)
             self.o2 = np.clip(self.o2, 2.0, 4.0)
 
-            # ---------------- TEMPERATURE ----------------
+            # --- SICAKLIK HESABI ---
             comb_eff = self.combustion_eff(self.o2)
-
             heat_gain = delayed_fuel * self.heat_gain_factor * comb_eff
-            heat_gain = np.clip(heat_gain, 0, 2500)
-
             heat_loss = (0.004 + self.conv_factor * self.fan) * (self.temp - self.T_env)
-
             net = heat_gain - heat_loss
 
-            # 🔥 SAFE DYNAMICS (explosion guard)
-            delta_temp = self.thermal_mass * (net / 1000.0)
-            delta_temp = np.clip(delta_temp, -50, 50)
+            # 🔥 DÜZELTME: Kütle artık bir çarpan değil, bölen!
+            # net enerjiyi kütleye bölerek değişimi zamana yayıyoruz.
+            # 1000.0 çarpanı birim dengelemesi içindir.
+            delta_temp = (net * 1.0) / self.thermal_mass 
+            
+            # Ani gürültüleri engellemek için küçük bir sınırlama
+            delta_temp = np.clip(delta_temp, -5.0, 5.0)
 
             self.temp += delta_temp
 
-            # ---------------- EFFICIENCY ----------------
+            # --- GERİ KALAN LOGLAMA ---
             temp_eff = np.exp(-0.5 * ((self.temp - 1450) / 80) ** 2)
             o2_eff = np.exp(-0.5 * ((self.o2 - 3.0) / 0.5) ** 2)
-
             eff = np.clip(0.6 * temp_eff + 0.4 * o2_eff, 0.0, 1.0)
 
-            # ---------------- LOG ----------------
             record = {
                 "Step": self.step_count,
                 "Fuel": float(self.fuel),
@@ -99,10 +96,8 @@ class RotaryKilnDigitalTwin:
                 "O2": float(self.o2),
                 "Efficiency": float(eff)
             }
-
             self.data.append(record)
             self.step_count += 1
-
             return record
 
         except Exception as e:
