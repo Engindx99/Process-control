@@ -147,7 +147,7 @@ if __name__ == "__main__":
     config = load_config()
 
     model_path = config["paths"]["model_save_path"]
-    total_steps = config["rl"].get("total_timesteps", 50000)
+    total_steps = config["rl"].get("total_timesteps")
     seed = config["rl"].get("seed", 42)
     np.random.seed(seed)
 

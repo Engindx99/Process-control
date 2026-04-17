@@ -3,13 +3,20 @@ import pandas as pd
 import logging
 
 class RotaryKilnDigitalTwin:
-    def __init__(self, config=None, log_level=logging.INFO):
+    def __init__(self, config=None, log_level=logging.INFO, seed=None):
+        # ---------------- SEEDING (MPC ve Eğitim Tekrarlanabilirliği İçin) ----------------
+        if seed is not None:
+            np.random.seed(seed)
+            self.seed = seed
+        else:
+            self.seed = None
+
         # ---------------- CONFIG MANAGEMENT ----------------
         self.config = config if config else {
             "physics": {
-                "thermal_mass": 2000,        # Isıl kütleyi orta şekerli yaptık (2600 ve 800 arası)
-                "heat_gain_factor": 22.17, 
-                "conv_factor": 0.00022,     # İstediğin gibi eski haline döndü (0.00022)
+                "thermal_mass": 3000,        
+                "heat_gain_factor": 20.0, 
+                "conv_factor": 0.00020,      # Stabil soğuma katsayısı
                 "delayed_steps": 12,
                 "fan_inertia": 0.15 
             },
@@ -23,6 +30,8 @@ class RotaryKilnDigitalTwin:
                 "setpoint": 1450.0
             }
         }
+        
+        # ---------------- LOGGING ----------------
         self.logger = logging.getLogger("RotaryKilnDT")
         self.logger.setLevel(log_level)
         if not self.logger.handlers:
@@ -30,11 +39,12 @@ class RotaryKilnDigitalTwin:
             formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s')
             ch.setFormatter(formatter)
             self.logger.addHandler(ch)
+            
         self.reset()
 
     def reset(self):
         self.temp = 1400.0
-        self.o2 = 3.2 # Başlangıç O2'yi ideal yanma noktasına çektik
+        self.o2 = 3.2 
         self.fuel = 16.0
         self.fan = 1000.0
         self.T_env = 25.0
@@ -47,13 +57,12 @@ class RotaryKilnDigitalTwin:
         return {"temp": self.temp, "o2": self.o2, "fuel": self.fuel, "fan": self.fan}
 
     def combustion_eff(self, o2):
-        # Yanma verimi %3.2 O2 civarında tepe yapar
         return 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.2) / 1.4) ** 2)
 
     def step(self, target_fuel, target_fan):
         try:
             target_fuel = np.clip(target_fuel, 12.0, 22.0)
-            target_fan = np.clip(target_fan, 850.0, 1100.0) # Fan alt limitini yükselttik (O2 bitmesin)
+            target_fan = np.clip(target_fan, 850.0, 1100.0)
 
             # 1. FAN ATALETİ
             alpha = self.config["physics"].get("fan_inertia", 0.15)
@@ -64,12 +73,10 @@ class RotaryKilnDigitalTwin:
             self.fuel_history.append(self.fuel)
             delayed_fuel = self.fuel_history.pop(0)
 
-            # 3. O2 DİNAMİĞİ (Dengelenmiş Formül)
-            # Yakıt artınca O2'yi daha dengeli tüketir, fan artınca daha kontrollü besler
+            # 3. O2 DİNAMİĞİ
             fuel_effect = 1.2 * np.tanh(0.18 * (self.fuel - 16))
             fan_effect = 1.5 * np.tanh((self.fan - 1000) / 120)
             
-            # Alt limit %1.8'in altına düşmemeli ki yanma durmasın
             o2_target = np.clip(3.4 + fan_effect - fuel_effect, 2.0, 5.0)
             self.o2 += 0.12 * (o2_target - self.o2)
 
@@ -81,14 +88,15 @@ class RotaryKilnDigitalTwin:
             delta_temp = (heat_gain - heat_loss) / self.config["physics"]["thermal_mass"]
             delta_temp = np.clip(delta_temp, -5.0, 5.0)
             
-            self.temp += delta_temp + np.random.normal(0, 0.05)
+            self.temp += delta_temp + np.random.normal(0, 0.4)
 
             record = {
                 "Step": self.step_count,
                 "Fuel": float(self.fuel),
                 "Fan": float(self.fan),
                 "Temperature": float(self.temp),
-                "O2": float(self.o2)
+                "O2": float(self.o2),
+                "Efficiency": float(eff)
             }
             self.data.append(record)
             self.step_count += 1
@@ -103,10 +111,8 @@ class RotaryKilnDigitalTwin:
         f_val = 16.0
         
         for i in range(steps):
-            # Yakıt rastgele dalgalanır
             f_val = np.clip(f_val + np.random.normal(0, self.config["noise"]["fuel_std"]), 13, 21)
             
-            # Fan yakıta ve sıcaklığa hizmet eder ama tabana yapışmaz
             fuel_demand = (f_val - 16) * 6
             temp_demand = (self.temp - 1420) * 1.0
             
