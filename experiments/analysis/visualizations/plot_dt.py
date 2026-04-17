@@ -1,5 +1,7 @@
 import sys
 import os
+import numpy as np
+import seaborn as sns # Matris için gerekli
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.dt.dt import RotaryKilnDigitalTwin
@@ -40,4 +42,18 @@ plt.ylabel('O₂ (%)')
 plt.grid(True, alpha=0.3)
 
 plt.tight_layout()
+
+# 3. Pencere - Korelasyon Matrisi (TAM KARE)
+plt.figure(3, figsize=(10, 8))
+corr_columns = ['Fuel', 'Fan', 'Temperature', 'O2']
+corr = df[corr_columns].corr()
+
+# Maske kullanmıyoruz, böylece matris tam kare görünecek
+sns.heatmap(corr, annot=True, cmap='coolwarm', fmt=".2f", 
+square=True, linewidths=.5, cbar_kws={"shrink": .7})
+
+plt.title('Digital Twin: Tam Özellik Etkileşim Analizi')
+plt.xticks(rotation=45)
+plt.yticks(rotation=0)
+
 plt.show()

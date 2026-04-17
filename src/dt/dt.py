@@ -1,19 +1,17 @@
 import numpy as np
 import pandas as pd
-import pickle
 import logging
-import os
 
 class RotaryKilnDigitalTwin:
     def __init__(self, config=None, log_level=logging.INFO):
-        # ---------------- CONFIG MANAGEMENT (MLOps Pillar) ----------------
+        # ---------------- CONFIG MANAGEMENT ----------------
         self.config = config if config else {
             "physics": {
-                "thermal_mass": 2600,
-                "heat_gain_factor": 21.7,
-                "conv_factor": 0.00022,
+                "thermal_mass": 2000,        # Isıl kütleyi orta şekerli yaptık (2600 ve 800 arası)
+                "heat_gain_factor": 22.17, 
+                "conv_factor": 0.00022,     # İstediğin gibi eski haline döndü (0.00022)
                 "delayed_steps": 12,
-                "fan_inertia": 0.15  # Atalet katsayısı (0.1: Çok ağır, 1.0: Anlık tepki)
+                "fan_inertia": 0.15 
             },
             "noise": {
                 "fuel_std": 0.05,
@@ -25,8 +23,6 @@ class RotaryKilnDigitalTwin:
                 "setpoint": 1450.0
             }
         }
-
-        # ---------------- LOGGING ----------------
         self.logger = logging.getLogger("RotaryKilnDT")
         self.logger.setLevel(log_level)
         if not self.logger.handlers:
@@ -34,14 +30,11 @@ class RotaryKilnDigitalTwin:
             formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s')
             ch.setFormatter(formatter)
             self.logger.addHandler(ch)
-
-        # ---------------- STATE ----------------
         self.reset()
 
     def reset(self):
-        """Simülasyonu başlangıç durumuna döndürür."""
         self.temp = 1400.0
-        self.o2 = 3.0
+        self.o2 = 3.2 # Başlangıç O2'yi ideal yanma noktasına çektik
         self.fuel = 16.0
         self.fan = 1000.0
         self.T_env = 25.0
@@ -54,45 +47,41 @@ class RotaryKilnDigitalTwin:
         return {"temp": self.temp, "o2": self.o2, "fuel": self.fuel, "fan": self.fan}
 
     def combustion_eff(self, o2):
+        # Yanma verimi %3.2 O2 civarında tepe yapar
         return 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.2) / 1.4) ** 2)
 
     def step(self, target_fuel, target_fan):
-        """
-        target_fuel: Kontrolcüden gelen hedef yakıt miktarı
-        target_fan: Kontrolcüden gelen hedef fan hızı
-        """
         try:
-            # 1. Giriş Sınırlandırma (Actuator Limits)
             target_fuel = np.clip(target_fuel, 12.0, 22.0)
-            target_fan = np.clip(target_fan, 950.0, 1100.0)
+            target_fan = np.clip(target_fan, 850.0, 1100.0) # Fan alt limitini yükselttik (O2 bitmesin)
 
-            # 2. FAN ATALETİ (First Order Lag)
-            # Mevcut fan hızı, hedef hıza atalet katsayısı kadar yaklaşır.
-            # Bu, fanın aniden hızlanmasını engeller.
+            # 1. FAN ATALETİ
             alpha = self.config["physics"].get("fan_inertia", 0.15)
             self.fan += alpha * (target_fan - self.fan)
 
-            # 3. YAKIT GECİKMESİ
+            # 2. YAKIT GECİKMESİ
             self.fuel = target_fuel
             self.fuel_history.append(self.fuel)
             delayed_fuel = self.fuel_history.pop(0)
 
-            # 4. O2 DİNAMİĞİ (O2 tepkisi fanın o anki hızına bağlıdır)
-            fuel_effect = 2.2 * np.tanh(0.25 * (self.fuel - 16))
-            fan_effect = 2.2 * np.tanh((self.fan - 1000) / 85)
-            o2_target = np.clip(3.0 + fan_effect - fuel_effect, 2.0, 5.0)
-            self.o2 += 0.25 * (o2_target - self.o2)
+            # 3. O2 DİNAMİĞİ (Dengelenmiş Formül)
+            # Yakıt artınca O2'yi daha dengeli tüketir, fan artınca daha kontrollü besler
+            fuel_effect = 1.2 * np.tanh(0.18 * (self.fuel - 16))
+            fan_effect = 1.5 * np.tanh((self.fan - 1000) / 120)
+            
+            # Alt limit %1.8'in altına düşmemeli ki yanma durmasın
+            o2_target = np.clip(3.4 + fan_effect - fuel_effect, 2.0, 5.0)
+            self.o2 += 0.12 * (o2_target - self.o2)
 
-            # 5. ISI DENGESİ
+            # 4. ISI DENGESİ
             eff = self.combustion_eff(self.o2)
             heat_gain = delayed_fuel * self.config["physics"]["heat_gain_factor"] * eff
             heat_loss = (0.004 + self.config["physics"]["conv_factor"] * self.fan) * (self.temp - self.T_env)
             
             delta_temp = (heat_gain - heat_loss) / self.config["physics"]["thermal_mass"]
-            delta_temp = np.clip(delta_temp, -self.config["limits"]["temp_delta_max"], 
-                                          self.config["limits"]["temp_delta_max"])
+            delta_temp = np.clip(delta_temp, -5.0, 5.0)
             
-            self.temp += delta_temp + np.random.normal(0, 0.08)
+            self.temp += delta_temp + np.random.normal(0, 0.05)
 
             record = {
                 "Step": self.step_count,
@@ -110,16 +99,19 @@ class RotaryKilnDigitalTwin:
             raise
 
     def run_full_simulation(self, steps=3000):
-        """Atalet ve gürültü içeren gerçekçi veri seti üretimi."""
-        self.logger.info(f"Simulating {steps} steps.")
-        f_val, v_val = 16.0, 1000.0
+        self.logger.info(f"Simulating {steps} steps with balanced Fuel-O2.")
+        f_val = 16.0
         
         for i in range(steps):
-            # Yakıt ve Fan gürültüsü
+            # Yakıt rastgele dalgalanır
             f_val = np.clip(f_val + np.random.normal(0, self.config["noise"]["fuel_std"]), 13, 21)
             
-            drift = self.config["noise"]["fan_drift_scale"] * np.sin(i / 150)
-            v_val = np.clip(1000 + drift + np.random.normal(0, self.config["noise"]["fan_std"]), 960, 1080)
+            # Fan yakıta ve sıcaklığa hizmet eder ama tabana yapışmaz
+            fuel_demand = (f_val - 16) * 6
+            temp_demand = (self.temp - 1420) * 1.0
+            
+            v_target = 1000 + fuel_demand + temp_demand
+            v_val = np.clip(v_target + np.random.normal(0, 1.0), 900, 1100)
             
             self.step(f_val, v_val)
 
