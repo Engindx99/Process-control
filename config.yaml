@@ -15,7 +15,7 @@ mpc:
     energy: 0.1
 
 rl:
-  total_timesteps: 150000 
+  total_timesteps: 100000 
   learning_rate: 1.0e-5    # Daha da yavaşlattık, pürüzsüzlükte 'ustalaşsın'
   n_steps: 4096
   batch_size: 512
@@ -29,9 +29,9 @@ observation:
 
 reward:
   # --- KRİTİK DEĞİŞİKLİKLER ---
-  temp_deadband: 0.8       # Disiplini artırdık (1.2'den 0.8'e)
-  big_error_scale: 0.5     # Hata 1455'e çıktığında canını yakıyoruz (0.01'den 0.5'e!)
-  small_error_scale: 2.0   # Hassas bölgedeki ödül/ceza baskısını 15 kat artırdık
+  temp_deadband: 0.2      
+  big_error_scale: 2.0     
+  small_error_scale: 3.95   
   
   jitter_penalty: 60.0     # VANAYI TİTRETMESİN DİYE CEZAYI 4 KATINA ÇIKARDIK (15 -> 60)
   damping_scale: 1.0       # Gereksiz karmaşıklığı sildik

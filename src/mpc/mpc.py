@@ -26,9 +26,9 @@ def fast_internal_predict(temp, o2, fuel, fan):
     heat_gain = min(fuel * 20.88 * comb_eff, 2500.0)
     heat_loss = (0.004 + 0.00022 * fan) * (temp - 25.0)
 
-    # KRİTİK GÜNCELLEME: 1/170 (Thermal Mass) ~= 0.00588
+    # KRİTİK GÜNCELLEME: 1/3100 (Thermal Mass) ~= 0.000322
     # MPC artık fırının gerçek hızını biliyor.
-    temp_next = temp + 0.00588 * (heat_gain - heat_loss)
+    temp_next = temp + 0.000322 * (heat_gain - heat_loss)
 
     return temp_next, o2
 
