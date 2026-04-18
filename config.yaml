@@ -1,46 +1,57 @@
+# Hardware & Device Settings
 hardware:
   num_cpu: 11
   device: "cuda"
 
+# Operational Targets
 system:
   setpoint: 1450.0
+  step_duration_sec: 5  # Analizlerde kullandığımız 5s ölçeği
 
+# MPC (Model Predictive Control) Settings
 mpc:
-  prediction_horizon: 120    # 100 -> 120 (Aşmayı (overshoot) önceden görüp fren yapmak için)
-  control_horizon: 8         # 6 -> 8 (Daha dengeli bir planlama penceresi)
-  maxiter: 15                # Çözüm kalitesi için 15 ideal
-  weights:
-    mse: 35.0                # 12.0 -> 35.0 (Hata yapmaya artık tahammülümüz yok)
-    smoothness: 65.0         # 234 -> 65.0 (Vana hala pürüzsüz ama artık hantal değil)
-    o2_tracking: 3.0         # Yanma verimliliği için kritik
-    energy: 0.2              # Yakıt tasarrufu için hafif baskı      
+  prediction_horizon: 120      # Uzun bakış (iyi, aynı kalıyor)
+  control_horizon: 20          # Daha fazla aksiyon kapasitesi
 
+  maxiter: 20                  # Biraz artır → daha iyi optimizasyon
+
+  weights:
+    mse: 5.0                   # Hedefe daha sıkı yapışma
+    smoothness: 100            # Aşırı kısıtlamayı kaldırdık
+    o2_tracking: 3.0           # Aynı bırak (iyi çalışıyor)
+    energy: 0.5                # Yakıt dalgalanmasını cezalandır            # Yakıt tasarrufu baskısı (Hafif)
+
+# RL (Reinforcement Learning - PPO) Settings
 rl:
   total_timesteps: 100000    
-  learning_rate: 3.0e-5       # 1e-5 çok yavaştı, 3e-4 çok hızlı. 3e-5 'tatlı nokta'
-  n_steps: 4096
-  batch_size: 512
-  gamma: 0.98
-  action_limit: 0.17          # %17'lik esneklik alanı
+  learning_rate: 3.0e-5      # Dengeli öğrenme hızı (v11 tatlı nokta)
+  n_steps: 4096              # Her güncelleme arası adım sayısı
+  batch_size: 512            # Mini-batch boyutu
+  gamma: 0.98                # Gelecek ödüllerin indirim oranı
+  action_limit: 0.17         # Yakıt değişimindeki %17'lik esneklik payı
 
+# Observation Space Normalization
 observation:
   temp_scale: 100.0
   o2_scale: 2.0
   fuel_scale: 5.0
 
+# Reward Function Weights
 reward:
-  temp_deadband: 0.2
-  big_error_scale: 2.0
-  small_error_scale: 5.8
-  jitter_penalty: 60.0        # Titremeye karşı ağır ceza
-  smooth_scale: 15.0          # Kareli ceza (ani zıplamaları bitirir)
-  bonus_small: 10.0           # Hedefte kalma ödülü
-  energy_scale: 0.01
+  temp_deadband: 0.2         # ±0.2 derece içindeyken ceza kesme
+  big_error_scale: 2.0       # Büyük sapmalara karşı direnç
+  small_error_scale: 5.8     # İnce ayar hassasiyeti
+  jitter_penalty: 60.0       # Sarı yakıt hattındaki titremeye ağır ceza
+  smooth_scale: 15.0         # Ani vana hareketlerine kareli ceza
+  bonus_small: 10.0          # Hedefte kalma (success) ödülü
+  energy_scale: 0.01         # Tasarruf önceliği (En düşük)
 
+# Physical Plant Limits
 plant:
   temp_min: 1200.0
   temp_max: 1700.0
 
+# File Paths & Logging
 paths:
   model_save_path: "models/ppo_kiln_v11_agile.zip"
   log_path: "logs/training_stats_v11.csv"
