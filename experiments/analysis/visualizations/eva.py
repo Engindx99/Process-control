@@ -57,7 +57,7 @@ if df_mpc is not None:
     ax1.plot(df_mpc['temp'], label=f'Pure MPC (MAE: {mae_mpc:.2f})', color='gray', alpha=0.4)
 
 mae_rl = np.mean(np.abs(temp_rl - setpoint))
-ax1.plot(temp_rl, label=f'New Hybrid RL (MAE: {mae_rl:.2f})', color='#1f77b4', linewidth=2)
+ax1.plot(temp_rl, label=f'New Hybrid RL (MAE: {mae_rl:.2f})', color='#1f77b4', linewidth=1.25)
 ax1.set_title("Fırın Sıcaklık: v8 Endüstriyel Mantık Analizi")
 ax1.legend()
 
@@ -65,7 +65,7 @@ ax1.legend()
 if df_mpc is not None:
     ax2.plot(df_mpc['fuel'], label='MPC Fuel', color='gray', alpha=0.4, linestyle='--')
 
-ax2.plot(fuel_rl, label='New Hybrid Fuel (Smoothed)', color='#2ca02c', linewidth=1.5)
+ax2.plot(fuel_rl, label='New Hybrid Fuel (Smoothed)', color='#2ca02c', linewidth=1.25)
 ax2.set_title("Yakıt Akışı: Titreşim ve Stabilite Kontrolü")
 ax2.set_xlabel("Steps")
 ax2.legend()

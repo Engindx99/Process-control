@@ -6,44 +6,41 @@ system:
   setpoint: 1450.0
 
 mpc:
-  prediction_horizon: 80
-  control_horizon: 3
+  prediction_horizon: 120    # 100 -> 120 (Aşmayı (overshoot) önceden görüp fren yapmak için)
+  control_horizon: 8         # 6 -> 8 (Daha dengeli bir planlama penceresi)
+  maxiter: 15                # Çözüm kalitesi için 15 ideal
   weights:
-    mse: 5.0            # MPC'nin hata hassasiyetini artırdık
-    smoothness: 5.0     # MPC'yi de pürüzsüzlüğe zorluyoruz
-    o2_tracking: 5.0    # Oksijeni biraz gevşetip sıcaklığa odaklandık
-    energy: 0.1
+    mse: 35.0                # 12.0 -> 35.0 (Hata yapmaya artık tahammülümüz yok)
+    smoothness: 65.0         # 234 -> 65.0 (Vana hala pürüzsüz ama artık hantal değil)
+    o2_tracking: 3.0         # Yanma verimliliği için kritik
+    energy: 0.2              # Yakıt tasarrufu için hafif baskı      
 
 rl:
-  total_timesteps: 100000 
-  learning_rate: 1.0e-5    # Daha da yavaşlattık, pürüzsüzlükte 'ustalaşsın'
+  total_timesteps: 100000    
+  learning_rate: 3.0e-5       # 1e-5 çok yavaştı, 3e-4 çok hızlı. 3e-5 'tatlı nokta'
   n_steps: 4096
   batch_size: 512
-  gamma: 0.98              # Daha 'anlık' kararlara odaklanıp salınımı (oscillation) bitiriyoruz
-  action_limit: 0.05       # RL'in etki alanını daralttık (%8'den %5'e). Bozgunculuk yapmasın.
+  gamma: 0.98
+  action_limit: 0.17          # %17'lik esneklik alanı
 
 observation:
-  temp_scale: 100.0        # Hatayı daha büyük hissetmesini sağlıyoruz
+  temp_scale: 100.0
   o2_scale: 2.0
   fuel_scale: 5.0
 
 reward:
-  # --- KRİTİK DEĞİŞİKLİKLER ---
-  temp_deadband: 0.2      
-  big_error_scale: 2.0     
-  small_error_scale: 3.95   
-  
-  jitter_penalty: 60.0     # VANAYI TİTRETMESİN DİYE CEZAYI 4 KATINA ÇIKARDIK (15 -> 60)
-  damping_scale: 1.0       # Gereksiz karmaşıklığı sildik
-  smooth_scale: 15.0       # Aksiyon değişimini kareli olarak çok sert cezalandırıyoruz
+  temp_deadband: 0.2
+  big_error_scale: 2.0
+  small_error_scale: 5.8
+  jitter_penalty: 60.0        # Titremeye karşı ağır ceza
+  smooth_scale: 15.0          # Kareli ceza (ani zıplamaları bitirir)
+  bonus_small: 10.0           # Hedefte kalma ödülü
   energy_scale: 0.01
-  bonus_small: 10.0        # 1450 civarında kalırsa 'bayram' etsin (1.5 -> 10.0)
 
 plant:
   temp_min: 1200.0
   temp_max: 1700.0
-  # Kalman R=3.9 veya 4.0 kod içinde zaten setli olduğunu varsayıyorum.
 
 paths:
-  model_save_path: "models/ppo_kiln_v8_final_push.zip" 
-  log_path: "logs/training_stats_v8.csv"
+  model_save_path: "models/ppo_kiln_v11_agile.zip"
+  log_path: "logs/training_stats_v11.csv"

@@ -15,7 +15,7 @@ def plot_kiln_custom_windows(csv_path):
     fig1, axes1 = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
     
     # Sıcaklık Paneli
-    axes1[0].plot(df['step'], df['temp'], label='Fırın Sıcaklığı (°C)', color='#1f77b4', lw=2)
+    axes1[0].plot(df['step'], df['temp'], label='Fırın Sıcaklığı (°C)', color='red', lw=1.2)
     axes1[0].axhline(y=1450, color='red', linestyle='--', alpha=0.6, label='Hedef (1450°C)')
     axes1[0].set_title(f"Sıcaklık ve Yakıt İlişkisi\nMAE: {df['error'].abs().mean():.4f}°C", fontsize=14)
     axes1[0].set_ylabel("Sıcaklık (°C)")
@@ -23,7 +23,7 @@ def plot_kiln_custom_windows(csv_path):
     axes1[0].grid(True, alpha=0.3)
 
     # Yakıt Paneli
-    axes1[1].plot(df['step'], df['fuel'], label='Yakıt Akışı (fuel)', color='#d62728', lw=1.8)
+    axes1[1].plot(df['step'], df['fuel'], label='Yakıt Akışı (fuel)', color='#DAA520', lw=1.2)
     axes1[1].set_ylabel("Yakıt Miktarı")
     axes1[1].set_xlabel("Adım (Step)")
     axes1[1].legend(loc='upper right')
@@ -37,7 +37,7 @@ def plot_kiln_custom_windows(csv_path):
 
     # Fan ve O2 Paneli (Twin Axis)
     ax2_twin = axes2[0].twinx()
-    p1, = axes2[0].plot(df['step'], df['fan'], label='Fan Hızı (RPM)', color='#9467bd', lw=1.5)
+    p1, = axes2[0].plot(df['step'], df['fan'], label='Fan Hızı (RPM)', color='#9467bd', lw=1.2)
     p2, = ax2_twin.plot(df['step'], df['o2'], label='O2 %', color='#2ca02c', lw=1.2, linestyle='-.')
     
     axes2[0].set_title("Hava ve Gaz Dengesi", fontsize=12)
