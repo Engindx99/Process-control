@@ -45,5 +45,5 @@ plant:
   # Kalman R=3.9 veya 4.0 kod içinde zaten setli olduğunu varsayıyorum.
 
 paths:
-  model_save_path: "models/ppo_kiln_v8_final_push" 
+  model_save_path: "models/ppo_kiln_v8_final_push.zip" 
   log_path: "logs/training_stats_v8.csv"
