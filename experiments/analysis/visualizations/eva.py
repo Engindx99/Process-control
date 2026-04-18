@@ -1,147 +1,76 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-from stable_baselines3 import PPO
-from src.rl.rl import make_env
-
 import yaml
 import numpy as np
-import logging
 import os
-
-
-# =========================================================
-# LOGGER
-# =========================================================
-logger = logging.getLogger("EVALUATION")
-logger.setLevel(logging.INFO)
-
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter("[%(asctime)s] %(levelname)s - %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
+from stable_baselines3 import PPO
+from src.rl.rl import ResidualKilnEnv 
 
 # =========================================================
-# LOAD CONFIG
+# 1. CONFIG VE MODEL YÜKLEME
 # =========================================================
-with open("config.yaml", "r") as f:
+# encoding='utf-8' ekleyerek Windows'un charmap hatasını çözüyoruz
+with open("config.yaml", "r", encoding='utf-8') as f:
     cfg = yaml.safe_load(f)
 
+setpoint = cfg['system']['setpoint']
+model_path = cfg['paths']['model_save_path']
+
+# MPC Baseline Verisi
+mpc_path = "data/pure_mpc_results.csv"
+df_mpc = pd.read_csv(mpc_path) if os.path.exists(mpc_path) else None
 
 # =========================================================
-# ENV + MODEL
+# 2. CANLI SİMÜLASYON (Yeni rl.py kurallarını çalıştırır)
 # =========================================================
-env = make_env(cfg, seed=42, rank=0)()
-model = PPO.load(cfg['paths']['model_save_path'])
-
+print("Güncel kurallarla canlı simülasyon başlatılıyor...")
+env = ResidualKilnEnv(cfg)
+model = PPO.load(model_path)
 
 obs, _ = env.reset()
+temp_rl, fuel_rl = [], []
+n_steps = len(df_mpc) if df_mpc is not None else 1000
 
-history = {
-    "temp": [],
-    "fuel": [],
-    "fan": [],
-    "action_fuel": [],
-    "action_fan": []
-}
-
-
-logger.info("Evaluation started (3000 steps)")
-
-
-# =========================================================
-# SIMULATION LOOP
-# =========================================================
-n_steps = cfg['rl'].get("eval_steps", 3000)
-
-for i in range(n_steps):
-
+for _ in range(n_steps):
     action, _ = model.predict(obs, deterministic=True)
-
-    obs, reward, terminated, truncated, info = env.step(action)
-
-    plant = env.unwrapped.plant
-
-    history["temp"].append(plant.temp)
-    history["fuel"].append(plant.fuel)
-    history["fan"].append(plant.fan)
-
-    history["action_fuel"].append(float(action[0]))
-    history["action_fan"].append(float(action[1]))
-
-    if i % 500 == 0:
-        logger.info(f"step={i} temp={plant.temp:.2f} reward={reward:.2f}")
-
-    if terminated:
-        logger.warning(f"Episode terminated at step {i}")
+    # Yeni Kalman filtreleme ve ceza mantığı bu step'in içinde çalışıyor
+    obs, reward, terminated, truncated, _ = env.step(action)
+    
+    temp_rl.append(env.plant.temp)
+    fuel_rl.append(env.plant.fuel)
+    
+    if terminated or truncated:
         break
 
+temp_rl = np.array(temp_rl)
+fuel_rl = np.array(fuel_rl)
 
 # =========================================================
-# METRICS
+# 3. GÖRSELLEŞTİRME
 # =========================================================
-temp_arr = np.array(history["temp"])
-setpoint = cfg['system']['setpoint']
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10), sharex=True)
 
-mae = np.mean(np.abs(temp_arr - setpoint))
-std = np.std(temp_arr)
-max_dev = np.max(np.abs(temp_arr - setpoint))
+# --- SICAKLIK ---
+ax1.axhline(setpoint, color='red', linestyle='--', label='Target')
+if df_mpc is not None:
+    mae_mpc = np.mean(np.abs(df_mpc['temp'] - setpoint))
+    ax1.plot(df_mpc['temp'], label=f'Pure MPC (MAE: {mae_mpc:.2f})', color='gray', alpha=0.4)
 
-logger.info(f"MAE: {mae:.3f}")
-logger.info(f"STD: {std:.3f}")
-logger.info(f"MAX DEV: {max_dev:.3f}")
-
-
-# =========================================================
-# PLOTTING
-# =========================================================
-
-# ---------------- TEMP + FUEL ----------------
-fig1, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10), sharex=True)
-
-ax1.axhline(setpoint, color='red', linestyle='--', linewidth=2, label='SETPOINT')
-ax1.plot(history['temp'], label='Temperature', linewidth=1.5)
-ax1.set_ylabel("Temp (°C)")
-ax1.grid(True, alpha=0.3)
+mae_rl = np.mean(np.abs(temp_rl - setpoint))
+ax1.plot(temp_rl, label=f'New Hybrid RL (MAE: {mae_rl:.2f})', color='#1f77b4', linewidth=2)
+ax1.set_title("Fırın Sıcaklık: v8 Endüstriyel Mantık Analizi")
 ax1.legend()
 
-ax1.set_title(f"Temperature Control | MAE: {mae:.2f}")
+# --- YAKIT ---
+if df_mpc is not None:
+    ax2.plot(df_mpc['fuel'], label='MPC Fuel', color='gray', alpha=0.4, linestyle='--')
 
-ax2.plot(history['fuel'], label='Fuel')
-ax2.set_ylabel("Fuel")
-ax2.set_xlabel("Step")
-ax2.grid(True, alpha=0.3)
+ax2.plot(fuel_rl, label='New Hybrid Fuel (Smoothed)', color='#2ca02c', linewidth=1.5)
+ax2.set_title("Yakıt Akışı: Titreşim ve Stabilite Kontrolü")
+ax2.set_xlabel("Steps")
 ax2.legend()
-
-
-# ---------------- ACTIONS ----------------
-plt.figure(figsize=(15, 6))
-
-plt.plot(history['action_fuel'], label='Fuel Action')
-plt.plot(history['action_fan'], label='Fan Action')
-plt.axhline(0, color='black', linewidth=0.5)
-
-plt.title(
-    f"RL Actions | limit={cfg['rl'].get('action_limit', 0.18)}"
-)
-
-plt.xlabel("Step")
-plt.ylabel("Action")
-plt.legend()
-plt.grid(True, alpha=0.2)
-
 
 plt.tight_layout()
 plt.show()
 
-
-# =========================================================
-# SAVE ARTIFACT
-# =========================================================
-os.makedirs("data", exist_ok=True)
-
-df = pd.DataFrame(history)
-df.to_csv("data/evaluation_results.csv", index=False)
-
-logger.info("Evaluation results saved -> data/evaluation_results.csv")
+print(f"Final Test MAE: {mae_rl:.3f}")

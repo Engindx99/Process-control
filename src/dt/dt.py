@@ -14,9 +14,9 @@ class RotaryKilnDigitalTwin:
         # ---------------- CONFIG MANAGEMENT ----------------
         self.config = config if config else {
             "physics": {
-                "thermal_mass": 3000,        
-                "heat_gain_factor": 20.0, 
-                "conv_factor": 0.00020,      # Stabil soğuma katsayısı
+                "thermal_mass": 3100,        
+                "heat_gain_factor": 22.78, 
+                "conv_factor": 0.00023,      # Stabil soğuma katsayısı
                 "delayed_steps": 12,
                 "fan_inertia": 0.15 
             },
@@ -88,7 +88,7 @@ class RotaryKilnDigitalTwin:
             delta_temp = (heat_gain - heat_loss) / self.config["physics"]["thermal_mass"]
             delta_temp = np.clip(delta_temp, -5.0, 5.0)
             
-            self.temp += delta_temp + np.random.normal(0, 0.4)
+            self.temp += delta_temp + np.random.normal(0, 0.14)
 
             record = {
                 "Step": self.step_count,

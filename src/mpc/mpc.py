@@ -3,55 +3,43 @@ from scipy.optimize import minimize
 from numba import njit
 import logging
 
-
 # =========================================================
-# FAST MODEL (NUMBA)
+# FAST MODEL (NUMBA) - Termal Kütle 170'e Göre Güncellendi
 # =========================================================
 @njit
 def fast_internal_predict(temp, o2, fuel, fan):
-
+    # Yakıt ve Fan Etkileri
     fuel_effect = 2.2 * np.tanh(0.25 * (fuel - 16))
     fan_effect = 2.2 * np.tanh((fan - 1000) / 85)
 
     o2_target = 3.0 + fan_effect - fuel_effect
-
-    if o2_target < 2.0:
-        o2_target = 2.0
-    if o2_target > 5.0:
-        o2_target = 5.0
-
+    
+    # O2 Sınırlandırma
+    o2_target = max(2.0, min(5.0, o2_target))
     o2 = o2 + 0.25 * (o2_target - o2)
+    o2 = max(2.0, min(4.0, o2))
 
-    if o2 < 2.0:
-        o2 = 2.0
-    if o2 > 4.0:
-        o2 = 4.0
-
+    # Yanma Verimi (Combustion Efficiency)
     comb_eff = 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.2) / 1.4) ** 2)
 
-    heat_gain = fuel * 20.88 * comb_eff
-    if heat_gain > 2500:
-        heat_gain = 2500
-
+    # Isı Kazancı ve Kaybı
+    heat_gain = min(fuel * 20.88 * comb_eff, 2500.0)
     heat_loss = (0.004 + 0.00022 * fan) * (temp - 25.0)
 
-    temp_next = temp + 0.02 * (heat_gain - heat_loss)
+    # KRİTİK GÜNCELLEME: 1/170 (Thermal Mass) ~= 0.00588
+    # MPC artık fırının gerçek hızını biliyor.
+    temp_next = temp + 0.00588 * (heat_gain - heat_loss)
 
     return temp_next, o2
 
-
 # =========================================================
-# COST FUNCTION
+# COST FUNCTION - Kararlı Durum Hatasını Silmek İçin Optimize Edildi
 # =========================================================
 @njit
 def fast_cost(
-    u, horizon,
-    temp0, o20,
-    temp_target,
-    last_fuel, last_fan,
-    w_mse, w_o2, w_energy, w_smooth
+    u, horizon, temp0, o20, temp_target,
+    last_fuel, last_fan, w_mse, w_o2, w_energy, w_smooth
 ):
-
     fuel_seq = u[:horizon]
     fan_seq = u[horizon:]
 
@@ -60,39 +48,36 @@ def fast_cost(
     cost = 0.0
 
     for k in range(horizon):
-
         temp, o2 = fast_internal_predict(temp, o2, fuel_seq[k], fan_seq[k])
 
+        # Hata maliyeti (Karesel hata 1450'ye zorlar)
         cost += w_mse * (temp - temp_target) ** 2
-        cost += w_o2 * (o2 - 3.0) ** 2
-        cost += w_energy * fuel_seq[k] ** 2
+        
+        # O2 takibi
+        cost += w_o2 * (o2 - 3.2) ** 2
+        
+        # Enerji maliyeti (Aşırı yakıt kullanımını önler ama MSE'yi ezmemeli)
+        cost += w_energy * (fuel_seq[k] - 16.0) ** 2
 
+        # Değişim Yumuşatma (Smoothness)
         if k == 0:
-            cost += w_smooth * (
-                (fuel_seq[k] - last_fuel) ** 2 +
-                0.1 * (fan_seq[k] - last_fan) ** 2
-            )
+            diff_f = fuel_seq[k] - last_fuel
+            diff_v = fan_seq[k] - last_fan
         else:
-            cost += w_smooth * (
-                (fuel_seq[k] - fuel_seq[k - 1]) ** 2 +
-                0.05 * (fan_seq[k] - fan_seq[k - 1]) ** 2
-            )
+            diff_f = fuel_seq[k] - fuel_seq[k-1]
+            diff_v = fan_seq[k] - fan_seq[k-1]
+            
+        cost += w_smooth * (diff_f**2 + 0.05 * diff_v**2)
 
     return cost
-
 
 # =========================================================
 # MPC CLASS
 # =========================================================
 class MPC:
-
     def __init__(self, config):
-
         self.config = config["mpc"]
-
-        # ---------------- SETPOINT SAFE LOAD ----------------
-        self.temp_target = self._get_setpoint(config)
-
+        self.temp_target = float(config["system"]["setpoint"])
         self.horizon = int(self.config["prediction_horizon"])
 
         w = self.config["weights"]
@@ -101,75 +86,44 @@ class MPC:
         self.w_o2 = float(w["o2_tracking"])
         self.w_energy = float(w["energy"])
 
-        self.last_fuel = 16.0
-        self.last_fan = 1000.0
         self.step_count = 0
 
-    # =====================================================
-    # CONFIG SAFE ACCESS
-    # =====================================================
-    def _get_setpoint(self, config):
-
-        # primary source
-        if "system" in config and "setpoint" in config["system"]:
-            return float(config["system"]["setpoint"])
-
-        # fallback (legacy support)
-        if "mpc" in config and "setpoint" in config["mpc"]:
-            return float(config["mpc"]["setpoint"])
-
-        raise KeyError("setpoint not found in config (system.setpoint required)")
-
-    # =====================================================
-    # OPTIMIZATION
-    # =====================================================
     def optimize(self, plant):
-
         temp0 = plant.temp
         o20 = plant.o2
-
-        self.last_fuel = plant.fuel
-        self.last_fan = plant.fan
-
+        
+        # Başlangıç tahmini (Warm start için mevcut değerler)
         x0 = np.concatenate([
-            np.full(self.horizon, self.last_fuel),
-            np.full(self.horizon, self.last_fan)
+            np.full(self.horizon, plant.fuel),
+            np.full(self.horizon, plant.fan)
         ])
 
+        # Fiziksel Sınırlar (Bounds)
         bounds = (
-            [(12.0, 22.0)] * self.horizon +
-            [(950.0, 1100.0)] * self.horizon
+            [(12.0, 22.0)] * self.horizon +   # Yakıt sınırları
+            [(950.0, 1100.0)] * self.horizon  # Fan devri sınırları
         )
 
+        # Optimizasyon (SLSQP)
         res = minimize(
             fast_cost,
             x0,
             args=(
-                self.horizon,
-                temp0,
-                o20,
-                self.temp_target,
-                self.last_fuel,
-                self.last_fan,
-                self.w_mse,
-                self.w_o2,
-                self.w_energy,
-                self.w_smooth
+                self.horizon, temp0, o20, self.temp_target,
+                plant.fuel, plant.fan,
+                self.w_mse, self.w_o2, self.w_energy, self.w_smooth
             ),
             method="SLSQP",
             bounds=bounds,
-            options={"maxiter": 5, "ftol": 1e-3}
+            options={
+                "maxiter": 5, 
+                "ftol": 1e-4    # Tolerans sıkılaştırıldı
+            }
         )
 
         u = res.x
-
         fuel_cmd = float(u[0])
         fan_cmd = float(u[self.horizon])
 
-        if self.step_count % 100 == 0:
-            error = temp0 - self.temp_target
-            print(f"[MPC] step={self.step_count} temp={temp0:.2f} error={error:.2f}")
-
         self.step_count += 1
-
         return fuel_cmd, fan_cmd

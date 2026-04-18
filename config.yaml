@@ -1,56 +1,49 @@
 hardware:
   num_cpu: 11
-  device: "auto"
-
+  device: "cuda"
 
 system:
   setpoint: 1450.0
 
-
 mpc:
   prediction_horizon: 80
   control_horizon: 3
-
   weights:
-    mse: 0.2
-    smoothness: 2500
-    o2_tracking: 50.0
-    energy: 0.5
-
+    mse: 5.0            # MPC'nin hata hassasiyetini artırdık
+    smoothness: 5.0     # MPC'yi de pürüzsüzlüğe zorluyoruz
+    o2_tracking: 5.0    # Oksijeni biraz gevşetip sıcaklığa odaklandık
+    energy: 0.1
 
 rl:
-  total_timesteps: 100000
-  learning_rate: 5e-6
+  total_timesteps: 150000 
+  learning_rate: 1.0e-5    # Daha da yavaşlattık, pürüzsüzlükte 'ustalaşsın'
   n_steps: 4096
   batch_size: 512
-  gamma: 0.995
-  action_limit: 0.16
-
+  gamma: 0.98              # Daha 'anlık' kararlara odaklanıp salınımı (oscillation) bitiriyoruz
+  action_limit: 0.05       # RL'in etki alanını daralttık (%8'den %5'e). Bozgunculuk yapmasın.
 
 observation:
-  temp_scale: 50.0
+  temp_scale: 100.0        # Hatayı daha büyük hissetmesini sağlıyoruz
   o2_scale: 2.0
   fuel_scale: 5.0
 
-
 reward:
-  temp_deadband: 3.0
-  big_error_scale: 0.005
-  small_error_scale: 0.05
-
-  damping_scale: 3.0    
-  smooth_scale: 15.0    
-  energy_scale: 0.02
-
-  bonus_small: 1.0
-  bonus_critical: 2.0
-
+  # --- KRİTİK DEĞİŞİKLİKLER ---
+  temp_deadband: 0.8       # Disiplini artırdık (1.2'den 0.8'e)
+  big_error_scale: 0.5     # Hata 1455'e çıktığında canını yakıyoruz (0.01'den 0.5'e!)
+  small_error_scale: 2.0   # Hassas bölgedeki ödül/ceza baskısını 15 kat artırdık
+  
+  jitter_penalty: 60.0     # VANAYI TİTRETMESİN DİYE CEZAYI 4 KATINA ÇIKARDIK (15 -> 60)
+  damping_scale: 1.0       # Gereksiz karmaşıklığı sildik
+  smooth_scale: 15.0       # Aksiyon değişimini kareli olarak çok sert cezalandırıyoruz
+  energy_scale: 0.01
+  bonus_small: 10.0        # 1450 civarında kalırsa 'bayram' etsin (1.5 -> 10.0)
 
 plant:
   temp_min: 1200.0
   temp_max: 1700.0
-
+  # Kalman R=3.9 veya 4.0 kod içinde zaten setli olduğunu varsayıyorum.
 
 paths:
-  model_save_path: "models/ppo_kiln_v5_final"
-  log_path: "logs/training_stats.csv"
+  model_save_path: "models/ppo_kiln_v8_final_push" 
+  log_path: "logs/training_stats_v8.csv"
