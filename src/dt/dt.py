@@ -14,9 +14,9 @@ class RotaryKilnDigitalTwin:
         # ---------------- CONFIG MANAGEMENT ----------------
         self.config = config if config else {
             "physics": {
-                "thermal_mass": 3100,        
-                "heat_gain_factor": 22.78, 
-                "conv_factor": 0.00023,      # Stabil soğuma katsayısı
+                "thermal_mass": 1050,        
+                "heat_gain_factor": 22.85, 
+                "conv_factor": 0.00030,      # Stabil soğuma katsayısı
                 "delayed_steps": 12,
                 "fan_inertia": 0.15 
             },

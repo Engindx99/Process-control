@@ -2,6 +2,8 @@ python main.py
 
 python -m experiments.analysis.visualizations.eva
 
+python -m experiments.analysis.visualizations.plot_dt
+
 
 python -m experiments.analysis.visualizations.mpc_v
 

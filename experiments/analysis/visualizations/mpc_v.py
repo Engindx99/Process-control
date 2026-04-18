@@ -2,30 +2,37 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import numpy as np
 
 def plot_kiln_custom_windows(csv_path):
     if not os.path.exists(csv_path):
         print(f"Hata: {csv_path} bulunamadı!")
         return
 
+    # Zaman Ölçeklendirme Faktörü (DT ile aynı olmalı)
+    DT_SEC = 5 
+
     df = pd.read_csv(csv_path)
+    # Adımları Dakikaya Çevir
+    df['minutes'] = df['step'] * DT_SEC / 60
+    
     plt.style.use('seaborn-v0_8-muted')
 
     # --- PENCERE 1: ANA KONTROL DÖNGÜSÜ (Sıcaklık ve Yakıt) ---
     fig1, axes1 = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
     
     # Sıcaklık Paneli
-    axes1[0].plot(df['step'], df['temp'], label='Fırın Sıcaklığı (°C)', color='red', lw=1.2)
+    axes1[0].plot(df['minutes'], df['temp'], label='Fırın Sıcaklığı (°C)', color='red', lw=1.2)
     axes1[0].axhline(y=1450, color='red', linestyle='--', alpha=0.6, label='Hedef (1450°C)')
-    axes1[0].set_title(f"Sıcaklık ve Yakıt İlişkisi\nMAE: {df['error'].abs().mean():.4f}°C", fontsize=14)
+    axes1[0].set_title(f"MPC Analizi: Sıcaklık ve Yakıt İlişkisi\nMAE: {df['error'].abs().mean():.4f}°C", fontsize=14)
     axes1[0].set_ylabel("Sıcaklık (°C)")
     axes1[0].legend(loc='upper right')
     axes1[0].grid(True, alpha=0.3)
 
     # Yakıt Paneli
-    axes1[1].plot(df['step'], df['fuel'], label='Yakıt Akışı (fuel)', color='#DAA520', lw=1.2)
+    axes1[1].plot(df['minutes'], df['fuel'], label='Yakıt Akışı (fuel)', color='#DAA520', lw=1.3)
     axes1[1].set_ylabel("Yakıt Miktarı")
-    axes1[1].set_xlabel("Adım (Step)")
+    axes1[1].set_xlabel("Zaman (Dakika)")
     axes1[1].legend(loc='upper right')
     axes1[1].grid(True, alpha=0.3)
     
@@ -37,8 +44,8 @@ def plot_kiln_custom_windows(csv_path):
 
     # Fan ve O2 Paneli (Twin Axis)
     ax2_twin = axes2[0].twinx()
-    p1, = axes2[0].plot(df['step'], df['fan'], label='Fan Hızı (RPM)', color='#9467bd', lw=1.2)
-    p2, = ax2_twin.plot(df['step'], df['o2'], label='O2 %', color='#2ca02c', lw=1.2, linestyle='-.')
+    p1, = axes2[0].plot(df['minutes'], df['fan'], label='Fan Hızı (RPM)', color='#17becf', lw=1.3)
+    p2, = ax2_twin.plot(df['minutes'], df['o2'], label='O2 %', color='#9467bd', lw=1.2, linestyle='-.')
     
     axes2[0].set_title("Hava ve Gaz Dengesi", fontsize=12)
     axes2[0].set_ylabel("Fan RPM")
@@ -46,12 +53,12 @@ def plot_kiln_custom_windows(csv_path):
     axes2[0].legend(handles=[p1, p2], loc='upper right')
     axes2[0].grid(True, alpha=0.3)
 
-    # Anlık Hata Paneli
-    axes2[1].fill_between(df['step'], df['error'], 0, where=(df['error'] >= 0), color='green', alpha=0.3)
-    axes2[1].fill_between(df['step'], df['error'], 0, where=(df['error'] < 0), color='red', alpha=0.3)
-    axes2[1].plot(df['step'], df['error'], color='black', lw=0.8, alpha=0.5, label='Hata (Error)')
+    # Anlık Hata Paneli (Fill Between ile Görselleştirme)
+    axes2[1].fill_between(df['minutes'], df['error'], 0, where=(df['error'] >= 0), color='green', alpha=0.3)
+    axes2[1].fill_between(df['minutes'], df['error'], 0, where=(df['error'] < 0), color='red', alpha=0.3)
+    axes2[1].plot(df['minutes'], df['error'], color='black', lw=0.8, alpha=0.5, label='Hata (Error)')
     axes2[1].set_ylabel("Hata (°C)")
-    axes2[1].set_xlabel("Adım (Step)")
+    axes2[1].set_xlabel("Zaman (Dakika)")
     axes2[1].legend(loc='upper right')
     axes2[1].grid(True, alpha=0.3)
 
