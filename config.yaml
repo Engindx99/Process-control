@@ -1,15 +1,15 @@
 # Physical Plant & Operational Limits
-limits:
+plant: 
   temp_min: 1200.0
   temp_max: 1700.0
   fuel_min: 12.0
-  fuel_max: 28.0    # Merdivenleri tırmanmak için gereken güç
+  fuel_max: 28.0
   fan_min: 850.0
   fan_max: 1100.0
 
 hardware:
   num_cpu: 11
-  device: "auto" # "cpu" veya "cuda"
+  device: "auto"
 
 # Operational Targets
 system:
@@ -19,20 +19,34 @@ system:
 # MPC Settings
 mpc:
   prediction_horizon: 120
-  control_horizon: 10   # 20'den 10'a: %50 hız artışı sağlar
-  maxiter: 12            # 20'den 12'ye: Optimizasyon döngüsünü hızlandırır
+  control_horizon: 10
+  maxiter: 12
   weights:
     mse: 2.0
-    smoothness: 1000.0    # Biraz daha artırarak yakıtı iyice sönümledik
+    smoothness: 1000.0
     o2_tracking: 3.0
     energy: 1.5
 
-# Reward Function Weights (RL Training)
+observation:
+  temp_scale: 100.0   
+  o2_scale: 5.0        
+  fuel_scale: 20.0     
+
+
+rl:
+  action_limit: 0.16
+  fan_action_limit: 10.0
+  learning_rate: 0.0003
+  n_steps: 2048
+  total_timesteps: 100000
+
 reward:
-  temp_deadband: 0.2
-  big_error_scale: 2.0
-  small_error_scale: 5.8
-  jitter_penalty: 60.0  # Yakıt titremesini durdurur
-  smooth_scale: 15.0
-  bonus_small: 10.0
-  energy_scale: 0.01
+  error_penalty_scale: 15.0
+  smoothness_weight: 20.0
+  efficiency_weight: 3.0
+  termination_penalty: 1000.0
+
+
+paths:
+  model_save_path: "models/ppo_rotary_kiln_residual"
+  log_path: "logs/"

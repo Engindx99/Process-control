@@ -2,95 +2,74 @@ import os
 import logging
 import pandas as pd
 import yaml
+import time
 from src.dt.dt import RotaryKilnDigitalTwin
 from src.mpc.mpc import MPC
 from src.rl.rl import train_rl
 
-# ---------------- LOGGING AYARI ----------------
+# LOGGING
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    format='[%(asctime)s] %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 def generate_pure_mpc_benchmark(config):
-    """
-    Sabit 1450°C Benchmark Senaryosu.
-    Fırın 1450'de başlar, hedef hep 1450'dir.
-    """
-    logger.info("--- 24 Saatlik SABİT 1450°C MPC Analizi Başlatılıyor ---")
+    output_path = "data/pure_mpc_results.csv"
     
-    # 1. Dijital İkiz Kurulumu
-    # NOT: dt.py içindeki reset() metodunda temp=1450 yaptığından emin ol!
-    plant = RotaryKilnDigitalTwin(config=config, seed=42)
-    
-    # 2. MPC Kontrolcü Kurulumu
+    if os.path.exists(output_path):
+        logger.info(f"--- [KONTROL] {output_path} bulundu. MPC atlanıyor. ---")
+        return
+
+    logger.info("--- [MPC] Simülasyon Başlatılıyor... ---")
+    plant = RotaryKilnDigitalTwin(config=config)
+    plant.reset() 
     mpc = MPC(config)
     
-    # Zaman parametreleri
-    step_sec = config["system"]["step_duration_sec"]
-    total_steps = int(24 * 3600 / step_sec) # 24 saat
-    
-    logger.info(f"Simülasyon toplam {total_steps} adım sürecek.")
+    total_steps = int(24 * 3600 / config["system"]["step_duration_sec"]) 
 
     for i in range(total_steps):
-        # HEDEF SABİT 1450
-        current_target = 1450.0
-        
-        # MPC Karar Mekanizması
-        try:
-            fuel_cmd, fan_cmd = mpc.optimize(plant, current_target)
-        except Exception as e:
-            logger.error(f"MPC Optimizasyon Hatası (Adım {i}): {e}")
-            break
-            
-        # Simülasyonda Adım At
+        fuel_cmd, fan_cmd = mpc.optimize(plant, 1450.0)
         result = plant.step(fuel_cmd, fan_cmd)
         
-        # Terminal Loglama (Her 120 dakikada bir - 2 saatte bir)
-        # 5 sn adım için 120 dk = 1440 adım
         if i % 1440 == 0:
-            current_min = (i * step_sec) / 60
-            logger.info(
-                f"Dakika: {int(current_min):4d} | "
-                f"Sıcaklık: {result['Temperature']:.2f}°C | "
-                f"Yakıt: {result['Fuel']:.2f} | "
-                f"O2: {result['O2']:.2f}%"
-            )
+            temp = result.get('temperature') or result.get('Temperature', 0)
+            logger.info(f"İlerleme: %{100*i/total_steps:.1f} | Temp: {temp:.2f}°C")
 
-    # Verileri Kaydet
-    if not os.path.exists("data"):
-        os.makedirs("data")
-        
     df = pd.DataFrame(plant.data)
-    output_path = "data/pure_mpc_results_1450_fixed.csv"
+    df.columns = [c.lower() for c in df.columns]
     df.to_csv(output_path, index=False)
-    logger.info(f"Benchmark tamamlandı: {output_path}")
+    logger.info(f"--- [BAŞARI] Benchmark kaydedildi. ---")
 
 def load_config(path="config.yaml"):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path} dosyası bulunamadı!")
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
 if __name__ == "__main__":
+    # Windows/Linux Multiprocessing güvenliği için zorunlu
     try:
-        # 1. Config Yükle
-        cfg = load_config()
-        logger.info("Config yüklendi.")
-
-        # 2. Klasör yapısını kontrol et
+        # 1. Klasörler
         for folder in ["data", "models", "logs"]:
-            if not os.path.exists(folder):
-                os.makedirs(folder)
+            if not os.path.exists(folder): os.makedirs(folder)
 
-        # 3. MPC Benchmark Çalıştır (Sabit 1450)
+        # 2. Config
+        cfg = load_config()
+        logger.info("Config başarıyla yüklendi.")
+
+        # 3. MPC (Dosya kontrolü fonksiyon içinde yapılıyor)
         generate_pure_mpc_benchmark(cfg)
 
-        # 4. RL Eğitimi (Hardware hatasını config'e eklediysen burası çalışır)
-        # Eğer sadece MPC görmek istiyorsan alt satırı yorum satırı yapabilirsin.
-        # train_rl(cfg)
+        # 4. RL EĞİTİMİ
+        logger.info("--- [RL] Stable-Baselines3 Başlatılıyor (CPU'lar hazırlanıyor...) ---")
+        
+        # CPU'ların ayağa kalkması için kısa bir bekleme (Bazen crash'i önler)
+        time.sleep(2) 
+        
+        train_rl(cfg)
 
-    except FileNotFoundError:
-        logger.error("config.yaml bulunamadı!")
+    except KeyboardInterrupt:
+        logger.info("Kullanıcı tarafından durduruldu.")
     except Exception as e:
-        logger.error(f"Ana döngüde kritik hata: {e}")
+        logger.error(f"KRİTİK HATA: {e}", exc_info=True)
