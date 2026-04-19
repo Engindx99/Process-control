@@ -22,7 +22,7 @@ class RotaryKilnPlant:
         self.co2 = 18.0            # %
         self.pressure = -3.0       # mbar (realistic draft)
 
-        self.fuel = 14.0
+        self.fuel = 18.5
         self.fan = 950.0
 
         # process parameters
@@ -118,16 +118,16 @@ class RotaryKilnPlant:
         # =========================
         # TEMPERATURE
         # =========================
-        burner = 2000.0
+        baseline_heat = 914
 
-        heat_gen = fuel * self.k_heat * eff + burner
-        heat_loss = 0.00036 * self.fan * (self.temp - 25)
+        heat_gen = fuel * self.k_heat * eff + baseline_heat
+        heat_loss = 0.0004 * self.fan * (self.temp - 25)
 
-        net_heat = (heat_gen - heat_loss) / 1284.0
+        net_heat = (heat_gen - heat_loss) / 3200
 
-        self.temp += 0.02 * net_heat
+        self.temp += 0.004 * net_heat
 
-        self.noise_temp = 0.9 * self.noise_temp + np.random.normal(0, 0.04)
+        self.noise_temp = 0.6 * self.noise_temp + np.random.normal(0, 0.05)
         self.temp += self.noise_temp
 
         self.temp = np.clip(self.temp, 1200.0, 1650.0)

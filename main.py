@@ -2,74 +2,99 @@ import os
 import logging
 import pandas as pd
 import yaml
+import numpy as np
 import time
-from src.dt.dt import RotaryKilnDigitalTwin
-from src.mpc.mpc import MPC
-from src.rl.rl import train_rl
 
-# LOGGING
+from src.dt.dt import RotaryKilnPlant
+from src.mpc.mpc import MPC 
+from src.filters.kalman import SelectiveKalmanFilter
+
+# LOGGING AYARLARI
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-def generate_pure_mpc_benchmark(config):
-    output_path = "data/pure_mpc_results.csv"
-    
-    if os.path.exists(output_path):
-        logger.info(f"--- [KONTROL] {output_path} bulundu. MPC atlanıyor. ---")
-        return
+def generate_mpc_benchmark(config):
+    # Çıktı klasörü kontrolü
+    output_path = config.get("paths", {}).get("output_csv", "data/mpc_results.csv")
+    output_dir = os.path.dirname(output_path)
+    if not os.path.exists(output_dir): 
+        os.makedirs(output_dir)
 
-    logger.info("--- [MPC] Simülasyon Başlatılıyor... ---")
-    plant = RotaryKilnDigitalTwin(config=config)
-    plant.reset() 
-    mpc = MPC(config)
+    logger.info("--- [MPC] Benchmark Simülasyonu Başlatılıyor... ---")
     
-    total_steps = int(24 * 3600 / config["system"]["step_duration_sec"]) 
+    # 1. Bileşenleri Başlatma
+    plant = RotaryKilnPlant(seed=config["plant"].get("seed", 42))
+    obs = plant.reset() 
+    
+    # MPC ve Kalman'ı başlat
+    mpc = MPC("config.yaml") 
+    kf = SelectiveKalmanFilter(config) 
+    
+    # 2. Zaman Planlaması
+    step_sec = config["system"].get("step_duration_sec", 5)
+    # 24 saatlik simülasyon (17280 adım)
+    total_steps = int(24 * 3600 / step_sec) 
+
+    logger.info(f"Parametreler: {total_steps} Adım | Adım Süresi: {step_sec}s | Hedef: {config['system']['setpoint']}°C")
+
+    # Performans ölçümü
+    start_sim_time = time.time()
+    last_report_time = start_sim_time
 
     for i in range(total_steps):
-        fuel_cmd, fan_cmd = mpc.optimize(plant, 1450.0)
-        result = plant.step(fuel_cmd, fan_cmd)
+        # --- FILTRELEME ADIMI ---
+        # Sensör gürültüsünü temizliyoruz
+        f_o2, f_press = kf.update(obs['o2'], obs['pressure'])
         
-        if i % 1440 == 0:
-            temp = result.get('temperature') or result.get('Temperature', 0)
-            logger.info(f"İlerleme: %{100*i/total_steps:.1f} | Temp: {temp:.2f}°C")
+        # --- KONTROL ADIMI (MPC) ---
+        try:
+            # MPC'ye plant nesnesini gönderiyoruz. 
+            # MPC içindeki 'deepcopy' işlemi bitince plant.data listesini 
+            # temizlediğimizden emin olmalısın ki StepTime şişmesin.
+            fuel_cmd, fan_cmd = mpc.get_action(plant) 
+            
+        except Exception as e:
+            logger.error(f"MPC Kritik Hatası (Adım {i}): {e}", exc_info=True)
+            break
+        
+        # --- PLANT ADIMI (GERÇEK DÜNYA) ---
+        obs = plant.step(fuel_cmd, fan_cmd)
+        
+        # Periyodik Raporlama (Her 120 adım = 10 Dakika simülasyon zamanı)
+        if i % 120 == 0 and i > 0:
+            current_real_time = time.time()
+            avg_step_perf = (current_real_time - last_report_time) / 120
+            last_report_time = current_real_time
+            
+            logger.info(
+                f"Adım {i:5d} | T: {obs['temp']:6.1f}°C | "
+                f"Yakıt: {fuel_cmd:5.2f} | Fan: {fan_cmd:6.1f} | "
+                f"O2: {obs['o2']:4.2f} | StepTime: {avg_step_perf:.3f}s"
+            )
 
+    # 3. Veriyi Kaydetme
+    # DataFrame oluştururken sütun isimlerini temizle
     df = pd.DataFrame(plant.data)
     df.columns = [c.lower() for c in df.columns]
     df.to_csv(output_path, index=False)
-    logger.info(f"--- [BAŞARI] Benchmark kaydedildi. ---")
-
-def load_config(path="config.yaml"):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"{path} dosyası bulunamadı!")
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+    
+    total_duration_min = (time.time() - start_sim_time) / 60
+    logger.info(f"--- [BAŞARI] Simülasyon {total_duration_min:.2f} dakikada bitti. ---")
+    logger.info(f"Sonuçlar kaydedildi: {output_path}")
 
 if __name__ == "__main__":
-    # Windows/Linux Multiprocessing güvenliği için zorunlu
     try:
-        # 1. Klasörler
-        for folder in ["data", "models", "logs"]:
-            if not os.path.exists(folder): os.makedirs(folder)
-
-        # 2. Config
-        cfg = load_config()
-        logger.info("Config başarıyla yüklendi.")
-
-        # 3. MPC (Dosya kontrolü fonksiyon içinde yapılıyor)
-        generate_pure_mpc_benchmark(cfg)
-
-        # 4. RL EĞİTİMİ
-        logger.info("--- [RL] Stable-Baselines3 Başlatılıyor (CPU'lar hazırlanıyor...) ---")
+        # Config dosyasını yükle
+        with open("config.yaml", "r") as f:
+            cfg = yaml.safe_load(f)
         
-        # CPU'ların ayağa kalkması için kısa bir bekleme (Bazen crash'i önler)
-        time.sleep(2) 
+        # Simülasyonu başlat
+        generate_mpc_benchmark(cfg)
         
-        train_rl(cfg)
-
-    except KeyboardInterrupt:
-        logger.info("Kullanıcı tarafından durduruldu.")
+    except FileNotFoundError:
+        logger.error("Hata: 'config.yaml' dosyası bulunamadı!")
     except Exception as e:
-        logger.error(f"KRİTİK HATA: {e}", exc_info=True)
+        logger.error(f"Sistem Başlatılamadı: {e}", exc_info=True)

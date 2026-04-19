@@ -4,6 +4,7 @@ python -m experiments.analysis.visualizations.eva
 
 python -m experiments.analysis.visualizations.dt_plot
 
+python -m src.filters.test_kalman
 
 python -m experiments.analysis.visualizations.mpc_v
 
