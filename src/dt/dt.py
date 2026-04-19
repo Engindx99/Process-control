@@ -2,156 +2,121 @@ import numpy as np
 import pandas as pd
 import logging
 
-class RotaryKilnDigitalTwin:
-    def __init__(self, config=None, log_level=logging.INFO, seed=None):
+class RotaryKilnPlant:
+    def __init__(self, seed=None):
 
         if seed is not None:
             np.random.seed(seed)
 
-        self.config = config if config else {}
-
-        self.logger = logging.getLogger("RotaryKilnDT")
-        self.logger.setLevel(log_level)
-
-        if not self.logger.handlers:
-            ch = logging.StreamHandler()
-            formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s')
-            ch.setFormatter(formatter)
-            self.logger.addHandler(ch)
-
-        # 🕒 TIME SCALE
-        self.step_duration_sec = self.config.get("system", {}).get("step_duration_sec", 60)
+        self.logger = logging.getLogger("KilnPlant")
+        self.logger.setLevel(logging.INFO)
 
         self.reset()
 
     def reset(self):
         self.temp = 1450.0
-        self.o2 = 2.0
+        self.o2 = 2.8
+        self.co2 = 18.0
+        self.pressure = 0.0
 
-        self.fuel = 18.9
+        self.fuel = 18.0
         self.fan = 950.0
 
-        self.T_env = 25.0
-        self.step_count = 0
+        self.k_heat = np.random.normal(0,0.005)
+        self.k_air = np.random.normal(0.02, 0.003)
+        self.k_leak = np.random.normal(0, 0.01)
+        self.tau_gas = np.random.normal(6.0, 0.8)
+
+        self.noise_o2 = 0.0
+        self.noise_temp = 0.0
+
+        self.history_fuel = [self.fuel] * 10
         self.data = []
+        self.step_count = 0
 
-        physics_cfg = self.config.get("physics", {})
-        d_steps = physics_cfg.get("delayed_steps", 12)
+        return self.state()
 
-        self.fuel_history = [self.fuel] * d_steps
-
-        return self._get_obs()
-
-    def _get_obs(self):
+    def state(self):
         return {
             "temp": self.temp,
             "o2": self.o2,
+            "co2": self.co2,
+            "pressure": self.pressure,
             "fuel": self.fuel,
             "fan": self.fan
         }
 
     def combustion_eff(self, o2):
-        return 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.2) / 1.4) ** 2)
+        return 1.0 / (1.0 + np.exp(-(o2 - 2.5)))
 
-    def step(self, target_fuel, target_fan):
+    def step(self, fuel_cmd, fan_cmd):
 
-        limits = self.config.get("limits", self.config.get("plant", {}))
-        f_min, f_max = limits.get("fuel_min", 12.0), limits.get("fuel_max", 28.0)
-        v_min, v_max = limits.get("fan_min", 850.0), limits.get("fan_max", 1100.0)
+        # actuator lag
+        self.fuel += 0.1 * (fuel_cmd - self.fuel)
+        self.fan += 0.15 * (fan_cmd - self.fan)
 
-        target_fuel = np.clip(target_fuel, f_min, f_max)
-        target_fan = np.clip(target_fan, v_min, v_max)
-
-        phys = self.config.get("physics", {})
-        thermal_mass = phys.get("thermal_mass", 1050.0)
-        heat_gain_f = phys.get("heat_gain_factor", 20.34)
-        conv_f = phys.get("conv_factor", 0.00026)
-
-        alpha_fan = phys.get("fan_inertia", 0.15)
-        alpha_fuel = phys.get("fuel_inertia", 0.10)
+        self.history_fuel.append(self.fuel)
+        fuel = self.history_fuel.pop(0)
 
         # =========================
-        # FAN DYNAMICS
+        # AIR
         # =========================
-        self.fan += alpha_fan * (target_fan - self.fan)
+        air_flow = self.k_air * np.sqrt(max(self.fan - 850, 0))
+        self.pressure = 0.85 * self.pressure + 0.15 * (air_flow - 1.0)
 
-        # =========================
-        # FUEL DYNAMICS
-        # =========================
-        self.fuel += alpha_fuel * (target_fuel - self.fuel)
-
-        self.fuel_history.append(self.fuel)
-        delayed_fuel = self.fuel_history.pop(0)
+        O2_in = 0.21 * air_flow
 
         # =========================
-        # 🔥 O2 PHYSICAL MASS BALANCE MODEL
-        # =========================
-
-        O2_IN_AIR = 0.21
-        STOICH_O2_PER_FUEL = 0.060
-
-        # air flow from fan (pressure-driven surrogate)
-        air_flow = max(0.0, (self.fan - 850.0) / 18.74)
-        oxygen_in = O2_IN_AIR * air_flow
-
-        # fuel oxygen consumption (chemical sink)
-        oxygen_consumed = STOICH_O2_PER_FUEL * self.fuel
-
-        # false air / leakage (preheater + kiln seals)
-        false_air = np.random.normal(0.05, 0.015)
-
-        # mixing / residence time (gas inertia)
-        mixing = 0.08 * (2.5 - self.o2)
-
-        # O2 state update (discrete ODE form)
-        self.o2 += 0.10 * (
-            oxygen_in
-            + false_air
-            - oxygen_consumed
-            + mixing
-        )
-
-        # physical bounds (kiln reality)
-        self.o2 = np.clip(self.o2, 0.8, 4.5)
-
-        # =========================
-        # TEMPERATURE MODEL
+        # O2
         # =========================
         eff = self.combustion_eff(self.o2)
 
-        heat_gain = delayed_fuel * heat_gain_f * eff
-        heat_loss = (0.004 + conv_f * self.fan) * (self.temp - self.T_env)
+        o2_sink = 0.055 * fuel * eff
+        mixing = (2.6 - self.o2) / self.tau_gas
 
-        delta_temp = (heat_gain - heat_loss) / thermal_mass
-        delta_temp = np.clip(delta_temp, -5.0, 5.0)
+        self.noise_o2 = 0.9 * self.noise_o2 + np.random.normal(0, 0.02)
 
-        self.temp += delta_temp + np.random.normal(0, 0.14)
+        self.o2 += 0.08 * (O2_in - o2_sink + mixing + self.k_leak)
+        self.o2 += self.noise_o2
+        self.o2 = np.clip(self.o2, 0.5, 5.0)
 
         # =========================
-        # TIME
+        # CO2
         # =========================
-        time_min = self.step_count * self.step_duration_sec / 60.0
+        self.co2 += 0.05 * (fuel * eff - self.co2 / 18.0)
+
+        # =========================
+        # 🔥 TEMPERATURE (STABLE)
+        # =========================
+        burner = 2000
+
+        heat_gen = fuel * self.k_heat * eff + burner
+        heat_loss = 0.00036 * self.fan * (self.temp - 25)
+
+        net_heat = (heat_gen - heat_loss) / 1284
+
+        # 🔥 ana kontrol
+        self.temp += 0.02 * net_heat
+
+        # noise
+        self.noise_temp = 0.9 * self.noise_temp + np.random.normal(0, 0.04)
+        self.temp += self.noise_temp
+
+        self.temp = np.clip(self.temp, 1200.0, 1650.0)
 
         # =========================
         # LOG
         # =========================
-        record = {
-            "step": self.step_count,
-            "time_min": time_min,
-            "temperature": float(self.temp),
-            "fuel": float(self.fuel),
-            "fan": float(self.fan),
-            "o2": float(self.o2),
-            "efficiency": float(eff),
-        }
+        self.step_count += 1
+
+        record = self.state()
+        record["step"] = self.step_count
 
         self.data.append(record)
-        self.step_count += 1
 
         return record
 
-    def run(self, steps=1440, fuel_cmd=18.5, fan_cmd=950.0):
-
+    def run(self, steps=1000, fuel_cmd=18, fan_cmd=950):
         self.reset()
 
         for _ in range(steps):

@@ -1,54 +1,51 @@
 import matplotlib.pyplot as plt
-import pandas as pd
-from src.dt.dt import RotaryKilnDigitalTwin
+from src.dt.dt import RotaryKilnPlant
 
 # =========================
-# DT RUN
+# RUN MULTI-EPISODE
 # =========================
-dt = RotaryKilnDigitalTwin()
-dt.reset()
+episodes = 1
 
-data = []
+for ep in range(episodes):
 
-fuel_cmd = dt.fuel
-fan_cmd = dt.fan
+    plant = RotaryKilnPlant(seed=None)  # IMPORTANT: no seed → stochastic
+    df = plant.run(steps=1440)
 
-for i in range(1440):
-    record = dt.step(fuel_cmd, fan_cmd)
-    data.append(record)
+    t = df["step"]
 
-df = pd.DataFrame(data)
-
-# =========================
-# TEMPERATURE (fixed y-axis)
-# =========================
-plt.figure()
-plt.plot(df["step"], df["temperature"], color="red")
-plt.title("Temperature")
-plt.xlabel("Step")
-plt.ylabel("°C")
-plt.ylim(1420, 1480)   # 🔥 fixed axis
-plt.grid()
-plt.show()
+    # =========================
+    # O2
+    # =========================
+    plt.figure()
+    plt.plot(t, df["o2"])
+    plt.title(f"O2 Dynamics - Episode {ep+1}")
+    plt.xlabel("Step")
+    plt.ylabel("O2 (%)")
+    plt.grid(True)
+    plt.show()
 
 # =========================
-# O2
+# TEMPERATURE
 # =========================
-plt.figure()
-plt.plot(df["step"], df["o2"], color="green")
-plt.title("O2")
-plt.xlabel("Step")
-plt.ylabel("O2 Level")
-plt.grid()
-plt.show()
+    plt.figure()
+    plt.plot(t, df["temp"])
+    plt.title(f"Temperature - Episode {ep+1}")
+    plt.xlabel("Step")
+    plt.ylabel("Temp (°C)")
 
-# =========================
-# EFFICIENCY
-# =========================
-plt.figure()
-plt.plot(df["step"], df["efficiency"], color="purple")
-plt.title("Efficiency")
-plt.xlabel("Step")
-plt.ylabel("Efficiency")
-plt.grid()
-plt.show()
+# 🔥 FIX: y-axis ticks 1400–1500 step 25
+    plt.yticks(range(1400, 1501, 25))
+
+    plt.grid(True)
+    plt.show()
+
+    # =========================
+    # PRESSURE
+    # =========================
+    plt.figure()
+    plt.plot(t, df["pressure"])
+    plt.title(f"Draft Pressure - Episode {ep+1}")
+    plt.xlabel("Step")
+    plt.ylabel("Pressure")
+    plt.grid(True)
+    plt.show()
