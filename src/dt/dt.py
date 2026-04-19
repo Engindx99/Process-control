@@ -64,7 +64,7 @@ class RotaryKilnDigitalTwin:
 
         phys = self.config.get("physics", {})
         thermal_mass = phys.get("thermal_mass", 1050.0)
-        heat_gain_f = phys.get("heat_gain_factor", 21.39)
+        heat_gain_f = phys.get("heat_gain_factor", 21.98)
         conv_f = phys.get("conv_factor", 0.00026)
 
         alpha_fan = phys.get("fan_inertia", 0.15)
