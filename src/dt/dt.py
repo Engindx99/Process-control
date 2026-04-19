@@ -19,16 +19,16 @@ class RotaryKilnDigitalTwin:
             ch.setFormatter(formatter)
             self.logger.addHandler(ch)
 
-        # 🕒 TIME SCALE (NEW)
+        # 🕒 TIME SCALE
         self.step_duration_sec = self.config.get("system", {}).get("step_duration_sec", 60)
 
         self.reset()
 
     def reset(self):
         self.temp = 1450.0
-        self.o2 = 3.2
+        self.o2 = 2.0
 
-        self.fuel = 18.5
+        self.fuel = 18.9
         self.fan = 950.0
 
         self.T_env = 25.0
@@ -64,7 +64,7 @@ class RotaryKilnDigitalTwin:
 
         phys = self.config.get("physics", {})
         thermal_mass = phys.get("thermal_mass", 1050.0)
-        heat_gain_f = phys.get("heat_gain_factor", 21.98)
+        heat_gain_f = phys.get("heat_gain_factor", 20.34)
         conv_f = phys.get("conv_factor", 0.00026)
 
         alpha_fan = phys.get("fan_inertia", 0.15)
@@ -84,13 +84,35 @@ class RotaryKilnDigitalTwin:
         delayed_fuel = self.fuel_history.pop(0)
 
         # =========================
-        # O2 DYNAMICS
+        # 🔥 O2 PHYSICAL MASS BALANCE MODEL
         # =========================
-        fuel_effect = 1.2 * np.tanh(0.18 * (self.fuel - 16))
-        fan_effect = 1.5 * np.tanh((self.fan - 1000) / 120)
 
-        o2_target = np.clip(3.4 + fan_effect - fuel_effect, 2.0, 5.0)
-        self.o2 += 0.12 * (o2_target - self.o2)
+        O2_IN_AIR = 0.21
+        STOICH_O2_PER_FUEL = 0.060
+
+        # air flow from fan (pressure-driven surrogate)
+        air_flow = max(0.0, (self.fan - 850.0) / 18.74)
+        oxygen_in = O2_IN_AIR * air_flow
+
+        # fuel oxygen consumption (chemical sink)
+        oxygen_consumed = STOICH_O2_PER_FUEL * self.fuel
+
+        # false air / leakage (preheater + kiln seals)
+        false_air = np.random.normal(0.05, 0.015)
+
+        # mixing / residence time (gas inertia)
+        mixing = 0.08 * (2.5 - self.o2)
+
+        # O2 state update (discrete ODE form)
+        self.o2 += 0.10 * (
+            oxygen_in
+            + false_air
+            - oxygen_consumed
+            + mixing
+        )
+
+        # physical bounds (kiln reality)
+        self.o2 = np.clip(self.o2, 0.8, 4.5)
 
         # =========================
         # TEMPERATURE MODEL
@@ -106,7 +128,7 @@ class RotaryKilnDigitalTwin:
         self.temp += delta_temp + np.random.normal(0, 0.14)
 
         # =========================
-        # TIME (NEW SEMANTIC LAYER)
+        # TIME
         # =========================
         time_min = self.step_count * self.step_duration_sec / 60.0
 
