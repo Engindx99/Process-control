@@ -1,71 +1,62 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-import os
 import numpy as np
+import os
 
-def plot_kiln_custom_windows(csv_path):
+def plot_kiln_fixed_1450(csv_path="data/pure_mpc_results.csv"):
     if not os.path.exists(csv_path):
         print(f"Hata: {csv_path} bulunamadı!")
         return
 
-    # Zaman Ölçeklendirme Faktörü (DT ile aynı olmalı)
-    DT_SEC = 5 
-
     df = pd.read_csv(csv_path)
-    # Adımları Dakikaya Çevir
-    df['minutes'] = df['step'] * DT_SEC / 60
+    # Kolon isimlerini standartlaştır
+    df.columns = [c.lower() for c in df.columns]
     
-    plt.style.use('seaborn-v0_8-muted')
-
-    # --- PENCERE 1: ANA KONTROL DÖNGÜSÜ (Sıcaklık ve Yakıt) ---
-    fig1, axes1 = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+    # Gerekli kolonları eşle
+    t_col = 'temperature' if 'temperature' in df.columns else 'temp'
     
-    # Sıcaklık Paneli
-    axes1[0].plot(df['minutes'], df['temp'], label='Fırın Sıcaklığı (°C)', color='red', lw=1.2)
-    axes1[0].axhline(y=1450, color='red', linestyle='--', alpha=0.6, label='Hedef (1450°C)')
-    axes1[0].set_title(f"MPC Analizi: Sıcaklık ve Yakıt İlişkisi\nMAE: {df['error'].abs().mean():.4f}°C", fontsize=14)
-    axes1[0].set_ylabel("Sıcaklık (°C)")
-    axes1[0].legend(loc='upper right')
-    axes1[0].grid(True, alpha=0.3)
+    # Zaman hesapla (5 sn adımlar)
+    df['minutes'] = df['step'] * 5 / 60
 
-    # Yakıt Paneli
-    axes1[1].plot(df['minutes'], df['fuel'], label='Yakıt Akışı (fuel)', color='#DAA520', lw=1.3)
-    axes1[1].set_ylabel("Yakıt Miktarı")
-    axes1[1].set_xlabel("Zaman (Dakika)")
-    axes1[1].legend(loc='upper right')
-    axes1[1].grid(True, alpha=0.3)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    plt.subplots_adjust(hspace=0.2)
+
+    # --- 1. GRAFİK: SICAKLIK (1440-1460 Odaklı) ---
+    ax1.plot(df['minutes'], df[t_col], color='red', label='Fırın Sıcaklığı', linewidth=1.2)
     
-    fig1.tight_layout()
-    fig1.canvas.manager.set_window_title('Sıcaklık & Yakıt Analizi')
-
-    # --- PENCERE 2: YANMA VE HAVA ANALİZİ (Fan, O2 ve Hata) ---
-    fig2, axes2 = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
-
-    # Fan ve O2 Paneli (Twin Axis)
-    ax2_twin = axes2[0].twinx()
-    p1, = axes2[0].plot(df['minutes'], df['fan'], label='Fan Hızı (RPM)', color='#17becf', lw=1.3)
-    p2, = ax2_twin.plot(df['minutes'], df['o2'], label='O2 %', color='#9467bd', lw=1.2, linestyle='-.')
+    # Tek bir sabit Setpoint çizgisi
+    ax1.axhline(y=1450, color='blue', linestyle='--', label='Hedef (1450°C)', alpha=0.3)
     
-    axes2[0].set_title("Hava ve Gaz Dengesi", fontsize=12)
-    axes2[0].set_ylabel("Fan RPM")
-    ax2_twin.set_ylabel("O2 %")
-    axes2[0].legend(handles=[p1, p2], loc='upper right')
-    axes2[0].grid(True, alpha=0.3)
+    # Eksen Limitleri Ayarı (İstediğin aralık)
+    ax1.set_ylim(1445, 1455) 
+    
+    ax1.set_ylabel("Sıcaklık (°C)")
+    ax1.set_title("Döner Fırın Kararlılık Analizi (Sabit 1450°C)")
+    ax1.grid(True, which='both', linestyle='--', alpha=0.5)
+    ax1.legend(loc='upper right')
 
-    # Anlık Hata Paneli (Fill Between ile Görselleştirme)
-    axes2[1].fill_between(df['minutes'], df['error'], 0, where=(df['error'] >= 0), color='green', alpha=0.3)
-    axes2[1].fill_between(df['minutes'], df['error'], 0, where=(df['error'] < 0), color='red', alpha=0.3)
-    axes2[1].plot(df['minutes'], df['error'], color='black', lw=0.8, alpha=0.5, label='Hata (Error)')
-    axes2[1].set_ylabel("Hata (°C)")
-    axes2[1].set_xlabel("Zaman (Dakika)")
-    axes2[1].legend(loc='upper right')
-    axes2[1].grid(True, alpha=0.3)
+    # İstatistik kutusu (Sadece 1450'ye göre hata)
+    mae = np.mean(np.abs(df[t_col] - 1450))
+    std = np.std(df[t_col])
+    stats_text = f"MAE: {mae:.4f} °C\nSTD: {std:.4f} °C"
+    ax1.text(0.02, 0.95, stats_text, transform=ax1.transAxes, verticalalignment='top', 
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-    fig2.tight_layout()
-    fig2.canvas.manager.set_window_title('Hava Dengesi & Hata Dağılımı')
+    # --- 2. GRAFİK: YAKIT ---
+    ax2.plot(df['minutes'], df['fuel'], color='goldenrod', label='Yakıt Tüketimi')
+    ax2.axhline(y=28.0, color='darkred', linestyle='--', label='Maks. Limit (28.0)')
+    
+    # Yakıt grafiği alt sınırı (Daha net görmek için)
+    ax2.set_ylim(10, 30)
+    
+    ax2.set_ylabel("Yakıt (kg/h)")
+    ax2.set_xlabel("Zaman (Dakika)")
+    ax2.grid(True, linestyle='--', alpha=0.5)
+    ax2.legend(loc='upper right')
 
+    plt.tight_layout()
+    print("Grafik güncellendi: 1440-1460 aralığına odaklanıldı.")
     plt.show()
 
 if __name__ == "__main__":
-    plot_kiln_custom_windows("data/pure_mpc_results.csv")
+    plot_kiln_fixed_1450()

@@ -1,45 +1,45 @@
 import numpy as np
 from scipy.optimize import minimize
 from numba import njit
-import logging
 
 # =========================================================
-# FAST MODEL (NUMBA) - Termal Kütle 170'e Göre Güncellendi
+# 1. FAST INTERNAL MODEL (NUMBA - CACHED)
 # =========================================================
-@njit
+@njit(cache=True)
 def fast_internal_predict(temp, o2, fuel, fan):
+    """
+    MPC'nin geleceği tahmin etmek için kullandığı hızlı model.
+    cache=True ile tekrar derleme (re-compilation) süresinden tasarruf sağlar.
+    """
     # Yakıt ve Fan Etkileri
-    fuel_effect = 2.2 * np.tanh(0.25 * (fuel - 16))
-    fan_effect = 2.2 * np.tanh((fan - 1000) / 85)
+    fuel_effect = 1.2 * np.tanh(0.18 * (fuel - 16))
+    fan_effect = 1.5 * np.tanh((fan - 1000) / 120)
 
-    o2_target = 3.0 + fan_effect - fuel_effect
-    
-    # O2 Sınırlandırma
+    # O2 Dinamiği
+    o2_target = 3.4 + fan_effect - fuel_effect
     o2_target = max(2.0, min(5.0, o2_target))
-    o2 = o2 + 0.25 * (o2_target - o2)
-    o2 = max(2.0, min(4.0, o2))
+    o2 = o2 + 0.12 * (o2_target - o2)
 
-    # Yanma Verimi (Combustion Efficiency)
+    # Yanma Verimi
     comb_eff = 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.2) / 1.4) ** 2)
 
-    # Isı Kazancı ve Kaybı
-    heat_gain = min(fuel * 20.88 * comb_eff, 2500.0)
-    heat_loss = (0.004 + 0.00022 * fan) * (temp - 25.0)
+    # Enerji Dengesi
+    heat_gain = fuel * 22.85 * comb_eff
+    heat_loss = (0.004 + 0.00030 * fan) * (temp - 25.0)
 
-    # KRİTİK GÜNCELLEME: 1/3100 (Thermal Mass) ~= 0.000322
-    temp_next = temp + 0.000322 * (heat_gain - heat_loss)
+    # Termal Kütle Etkisi (1 / 1050)
+    temp_next = temp + 0.00095238 * (heat_gain - heat_loss)
 
     return temp_next, o2
 
 # =========================================================
-# COST FUNCTION - Receding Horizon & Zero-Order Hold
+# 2. COST FUNCTION (NUMBA - CACHED)
 # =========================================================
-@njit
+@njit(cache=True)
 def fast_cost(
     u, p_horizon, temp0, o20, temp_target,
     last_fuel, last_fan, w_mse, w_o2, w_energy, w_smooth
 ):
-    # u dizisi control_horizon (c_horizon) uzunluğundadır
     c_horizon = len(u) // 2 
     fuel_seq = u[:c_horizon]
     fan_seq = u[c_horizon:]
@@ -49,96 +49,98 @@ def fast_cost(
     cost = 0.0
 
     for k in range(p_horizon):
-        # Tahmin ufkunda kontrol ufkunu geçtiysek, son kararı sabit tut (ZOH)
-        if k < c_horizon:
-            curr_fuel = fuel_seq[k]
-            curr_fan = fan_seq[k]
-        else:
-            curr_fuel = fuel_seq[c_horizon - 1]
-            curr_fan = fan_seq[c_horizon - 1]
+        # Zero-Order Hold (ZOH)
+        idx = min(k, c_horizon - 1)
+        curr_fuel = fuel_seq[idx]
+        curr_fan = fan_seq[idx]
 
         temp, o2 = fast_internal_predict(temp, o2, curr_fuel, curr_fan)
 
-        # 1. Hata maliyeti (Hassas hedef takibi)
+        # Hata maliyeti
         cost += w_mse * (temp - temp_target) ** 2
         
-        # 2. O2 takibi
+        # O2 Takibi
         cost += w_o2 * (o2 - 3.2) ** 2
         
-        # 3. Enerji maliyeti (Aşırı yakıt kullanımını önler)
+        # Enerji (Yakıt Tasarrufu)
         cost += w_energy * (curr_fuel - 16.0) ** 2
 
-        # 4. Değişim Yumuşatma (Sadece kontrol kararları için ceza)
+        # Değişim Yumuşatma
         if k < c_horizon:
-            if k == 0:
-                diff_f = curr_fuel - last_fuel
-                diff_v = curr_fan - last_fan
-            else:
-                diff_f = curr_fuel - fuel_seq[k-1]
-                diff_v = curr_fan - fan_seq[k-1]
-            
-            # Smoothness ağırlığı burada devreye girer
-            cost += w_smooth * (diff_f**2 + 0.05 * diff_v**2)
+            prev_f = last_fuel if k == 0 else fuel_seq[k-1]
+            prev_v = last_fan if k == 0 else fan_seq[k-1]
+            cost += w_smooth * ((curr_fuel - prev_f)**2 + 0.1 * (curr_fan - prev_v)**2)
 
     return cost
 
 # =========================================================
-# MPC CLASS
+# 3. MPC CLASS (HIZLI VE DINAMIK)
 # =========================================================
 class MPC:
     def __init__(self, config):
-        self.config = config["mpc"]
-        self.temp_target = float(config["system"]["setpoint"])
+        self.full_config = config
+        self.mpc_config = config["mpc"]
         
-        # Horizon Ayarları
-        self.p_horizon = int(self.config["prediction_horizon"])
-        self.c_horizon = int(self.config.get("control_horizon", 6))
+        # Ufuk Ayarları (Hız için ideal değerler)
+        self.p_horizon = int(self.mpc_config.get("prediction_horizon", 120))
+        self.c_horizon = int(self.mpc_config.get("control_horizon", 10)) # 20'den 10'a düşürmek hızı 2 kat artırır
+        self.max_iter = int(self.mpc_config.get("maxiter", 12))         # 20'den 12'ye düşürmek optimizasyonu hızlandırır
         
-        # Optimizasyon Parametreleri
-        self.max_iter = int(self.config.get("maxiter", 15))
-        
-        w = self.config["weights"]
+        # Ağırlıklar
+        w = self.mpc_config["weights"]
         self.w_mse = float(w["mse"])
         self.w_smooth = float(w["smoothness"])
         self.w_o2 = float(w["o2_tracking"])
-        self.w_energy = float(w["energy"])
+        self.w_energy = float(w.get("energy", 0.5))
 
-    def optimize(self, plant):
+    def optimize(self, plant, current_target):
+        """
+        Dinamik limitlerle hızlı optimizasyon.
+        """
         temp0 = plant.temp
         o20 = plant.o2
         
+        # Limitleri config'den çek (28.0 yakıt tavanı dahil)
+        limits = self.full_config.get("limits", self.full_config.get("plant", {}))
+        f_min = limits.get("fuel_min", 12.0)
+        f_max = limits.get("fuel_max", 28.0)
+        v_min = limits.get("fan_min", 850.0)
+        v_max = limits.get("fan_max", 1100.0)
+
         # Başlangıç tahmini (Warm start)
         x0 = np.concatenate([
             np.full(self.c_horizon, plant.fuel),
             np.full(self.c_horizon, plant.fan)
         ])
 
-        # Fiziksel Sınırlar (Bounds)
+        # Sınırlar
         bounds = (
-            [(12.0, 22.0)] * self.c_horizon +   # Yakıt min/max
-            [(950.0, 1100.0)] * self.c_horizon  # Fan min/max
+            [(f_min, f_max)] * self.c_horizon +   
+            [(v_min, v_max)] * self.c_horizon
         )
 
-        # Optimizasyon (SLSQP)
+        # Optimizasyon Çözücü
         res = minimize(
             fast_cost,
             x0,
             args=(
-                self.p_horizon, temp0, o20, self.temp_target,
+                self.p_horizon, temp0, o20, current_target,
                 plant.fuel, plant.fan,
                 self.w_mse, self.w_o2, self.w_energy, self.w_smooth
             ),
             method="SLSQP",
             bounds=bounds,
             options={
-                "maxiter": self.max_iter,
-                "ftol": 1e-4
+                "maxiter": self.max_iter, 
+                "ftol": 1e-3,        # Çok küçük değerler (1e-6) hızı düşürür, 1e-3 yeterlidir
+                "disp": False
             }
         )
 
-        # İlk adımı (current action) al ve uygula
         u = res.x
-        fuel_cmd = float(u[0])
-        fan_cmd = float(u[self.c_horizon])
+        
+        # Güvenlik Kırpması (Hard Clip)
+        final_fuel = np.clip(u[0], f_min, f_max)
+        final_fan = np.clip(u[self.c_horizon], v_min, v_max)
 
-        return fuel_cmd, fan_cmd
+        return float(final_fuel), float(final_fan)

@@ -1,57 +1,38 @@
-# Hardware & Device Settings
+# Physical Plant & Operational Limits
+limits:
+  temp_min: 1200.0
+  temp_max: 1700.0
+  fuel_min: 12.0
+  fuel_max: 28.0    # Merdivenleri tırmanmak için gereken güç
+  fan_min: 850.0
+  fan_max: 1100.0
+
 hardware:
   num_cpu: 11
-  device: "cuda"
+  device: "auto" # "cpu" veya "cuda"
 
 # Operational Targets
 system:
   setpoint: 1450.0
-  step_duration_sec: 5  # Analizlerde kullandığımız 5s ölçeği
+  step_duration_sec: 5
 
-# MPC (Model Predictive Control) Settings
+# MPC Settings
 mpc:
-  prediction_horizon: 120      # Uzun bakış (iyi, aynı kalıyor)
-  control_horizon: 20          # Daha fazla aksiyon kapasitesi
-
-  maxiter: 20                  # Biraz artır → daha iyi optimizasyon
-
+  prediction_horizon: 120
+  control_horizon: 10   # 20'den 10'a: %50 hız artışı sağlar
+  maxiter: 12            # 20'den 12'ye: Optimizasyon döngüsünü hızlandırır
   weights:
-    mse: 5.0                   # Hedefe daha sıkı yapışma
-    smoothness: 100            # Aşırı kısıtlamayı kaldırdık
-    o2_tracking: 3.0           # Aynı bırak (iyi çalışıyor)
-    energy: 0.5                # Yakıt dalgalanmasını cezalandır            # Yakıt tasarrufu baskısı (Hafif)
+    mse: 2.0
+    smoothness: 1000.0    # Biraz daha artırarak yakıtı iyice sönümledik
+    o2_tracking: 3.0
+    energy: 1.5
 
-# RL (Reinforcement Learning - PPO) Settings
-rl:
-  total_timesteps: 100000    
-  learning_rate: 3.0e-5      # Dengeli öğrenme hızı (v11 tatlı nokta)
-  n_steps: 4096              # Her güncelleme arası adım sayısı
-  batch_size: 512            # Mini-batch boyutu
-  gamma: 0.98                # Gelecek ödüllerin indirim oranı
-  action_limit: 0.17         # Yakıt değişimindeki %17'lik esneklik payı
-
-# Observation Space Normalization
-observation:
-  temp_scale: 100.0
-  o2_scale: 2.0
-  fuel_scale: 5.0
-
-# Reward Function Weights
+# Reward Function Weights (RL Training)
 reward:
-  temp_deadband: 0.2         # ±0.2 derece içindeyken ceza kesme
-  big_error_scale: 2.0       # Büyük sapmalara karşı direnç
-  small_error_scale: 5.8     # İnce ayar hassasiyeti
-  jitter_penalty: 60.0       # Sarı yakıt hattındaki titremeye ağır ceza
-  smooth_scale: 15.0         # Ani vana hareketlerine kareli ceza
-  bonus_small: 10.0          # Hedefte kalma (success) ödülü
-  energy_scale: 0.01         # Tasarruf önceliği (En düşük)
-
-# Physical Plant Limits
-plant:
-  temp_min: 1200.0
-  temp_max: 1700.0
-
-# File Paths & Logging
-paths:
-  model_save_path: "models/ppo_kiln_v11_agile.zip"
-  log_path: "logs/training_stats_v11.csv"
+  temp_deadband: 0.2
+  big_error_scale: 2.0
+  small_error_scale: 5.8
+  jitter_penalty: 60.0  # Yakıt titremesini durdurur
+  smooth_scale: 15.0
+  bonus_small: 10.0
+  energy_scale: 0.01

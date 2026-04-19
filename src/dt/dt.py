@@ -4,7 +4,7 @@ import logging
 
 class RotaryKilnDigitalTwin:
     def __init__(self, config=None, log_level=logging.INFO, seed=None):
-        # ---------------- SEEDING (MPC ve Eğitim Tekrarlanabilirliği İçin) ----------------
+        # ---------------- SEEDING ----------------
         if seed is not None:
             np.random.seed(seed)
             self.seed = seed
@@ -12,24 +12,9 @@ class RotaryKilnDigitalTwin:
             self.seed = None
 
         # ---------------- CONFIG MANAGEMENT ----------------
-        self.config = config if config else {
-            "physics": {
-                "thermal_mass": 1050,        
-                "heat_gain_factor": 22.85, 
-                "conv_factor": 0.00030,      # Stabil soğuma katsayısı
-                "delayed_steps": 12,
-                "fan_inertia": 0.15 
-            },
-            "noise": {
-                "fuel_std": 0.05,
-                "fan_std": 0.3,
-                "fan_drift_scale": 5
-            },
-            "limits": {
-                "temp_delta_max": 5.0,
-                "setpoint": 1450.0
-            }
-        }
+        # Eğer dışarıdan config gelmezse veya eksik gelirse sistemin çökmemesi için
+        # güvenli bir sözlük yapısı kuruyoruz.
+        self.config = config if config else {}
         
         # ---------------- LOGGING ----------------
         self.logger = logging.getLogger("RotaryKilnDT")
@@ -43,29 +28,60 @@ class RotaryKilnDigitalTwin:
         self.reset()
 
     def reset(self):
-        self.temp = 1400.0
+        """Sistemi 1300°C başlangıç noktasına resetler."""
+        self.temp = 1450.0
         self.o2 = 3.2 
-        self.fuel = 16.0
-        self.fan = 1000.0
+        self.fuel = 18.5
+        self.fan = 950.0
         self.T_env = 25.0
         self.step_count = 0
         self.data = []
-        self.fuel_history = [self.fuel] * self.config["physics"]["delayed_steps"]
+        
+        # KeyError: 'physics' hatasını önlemek için güvenli okuma:
+        # Config'de yoksa varsayılan olarak 12 adımlık gecikme kullanır.
+        physics_cfg = self.config.get("physics", {})
+        d_steps = physics_cfg.get("delayed_steps", 12)
+        
+        # Yakıt hattındaki gecikme kuyruğu
+        self.fuel_history = [self.fuel] * d_steps
         return self._get_obs()
 
     def _get_obs(self):
         return {"temp": self.temp, "o2": self.o2, "fuel": self.fuel, "fan": self.fan}
 
     def combustion_eff(self, o2):
+        """Oksijene bağlı yanma verimliliği (Çan eğrisi)."""
         return 0.6 + 0.4 * np.exp(-0.5 * ((o2 - 3.2) / 1.4) ** 2)
 
+    def get_staircase_target(self, current_minute):
+        """Merdiven stratejisi: Her 60 dk'da bir +20°C artış, final 1450°C."""
+        if current_minute < 60: return 1300
+        elif current_minute < 120: return 1320
+        elif current_minute < 180: return 1340
+        elif current_minute < 240: return 1360
+        else: return 1450
+
     def step(self, target_fuel, target_fan):
+        """Fizik motorunun tek bir adımı."""
         try:
-            target_fuel = np.clip(target_fuel, 12.0, 22.0)
-            target_fan = np.clip(target_fan, 850.0, 1100.0)
+            # Limitleri config'den (limits veya plant başlığından) güvenli çek:
+            limits = self.config.get("limits", self.config.get("plant", {}))
+            f_min = limits.get("fuel_min", 12.0)
+            f_max = limits.get("fuel_max", 28.0)
+            v_min = limits.get("fan_min", 850.0)
+            v_max = limits.get("fan_max", 1100.0)
+
+            target_fuel = np.clip(target_fuel, f_min, f_max)
+            target_fan = np.clip(target_fan, v_min, v_max)
+
+            # Fiziksel Parametreler (Config'de yoksa standart fırın fiziği kullanılır)
+            phys = self.config.get("physics", {})
+            thermal_mass = phys.get("thermal_mass", 1050.0)
+            heat_gain_f = phys.get("heat_gain_factor", 19.87)
+            conv_f = phys.get("conv_factor", 0.00025)
+            alpha = phys.get("fan_inertia", 0.15)
 
             # 1. FAN ATALETİ
-            alpha = self.config["physics"].get("fan_inertia", 0.15)
             self.fan += alpha * (target_fan - self.fan)
 
             # 2. YAKIT GECİKMESİ
@@ -76,27 +92,30 @@ class RotaryKilnDigitalTwin:
             # 3. O2 DİNAMİĞİ
             fuel_effect = 1.2 * np.tanh(0.18 * (self.fuel - 16))
             fan_effect = 1.5 * np.tanh((self.fan - 1000) / 120)
-            
             o2_target = np.clip(3.4 + fan_effect - fuel_effect, 2.0, 5.0)
             self.o2 += 0.12 * (o2_target - self.o2)
 
             # 4. ISI DENGESİ
             eff = self.combustion_eff(self.o2)
-            heat_gain = delayed_fuel * self.config["physics"]["heat_gain_factor"] * eff
-            heat_loss = (0.004 + self.config["physics"]["conv_factor"] * self.fan) * (self.temp - self.T_env)
+            heat_gain = delayed_fuel * heat_gain_f * eff
+            heat_loss = (0.004 + conv_f * self.fan) * (self.temp - self.T_env)
             
-            delta_temp = (heat_gain - heat_loss) / self.config["physics"]["thermal_mass"]
+            delta_temp = (heat_gain - heat_loss) / thermal_mass
             delta_temp = np.clip(delta_temp, -5.0, 5.0)
             
             self.temp += delta_temp + np.random.normal(0, 0.14)
 
+            current_target = self.get_staircase_target(self.step_count * (self.config.get("system", {}).get("step_duration_sec", 5) / 60))
+
             record = {
-                "Step": self.step_count,
-                "Fuel": float(self.fuel),
-                "Fan": float(self.fan),
-                "Temperature": float(self.temp),
-                "O2": float(self.o2),
-                "Efficiency": float(eff)
+                "step": self.step_count,
+                "target_Temp": float(current_target),
+                "temperature": float(self.temp),
+                "fuel": float(self.fuel),
+                "fan": float(self.fan),
+                "o2": float(self.o2),
+                "efficiency": float(eff),
+                "error": float(self.temp - current_target)
             }
             self.data.append(record)
             self.step_count += 1
@@ -106,19 +125,23 @@ class RotaryKilnDigitalTwin:
             self.logger.error(f"Step Error: {e}")
             raise
 
-    def run_full_simulation(self, steps=3000):
-        self.logger.info(f"Simulating {steps} steps with balanced Fuel-O2.")
-        f_val = 16.0
+    def run_staircase_simulation(self, total_steps=360):
+        """
+        Merdiven senaryosunu baştan sona koşturur.
+        Bu metod, MPC veya RL entegrasyonu için şablon niteliğindedir.
+        """
+        self.logger.info(f"Staircase simulation started for {total_steps} minutes.")
+        self.reset()
         
-        for i in range(steps):
-            f_val = np.clip(f_val + np.random.normal(0, self.config["noise"]["fuel_std"]), 13, 21)
+        for i in range(total_steps):
+            # Burada normalde MPC veya RL karar verir. 
+            # Test amaçlı basit bir takip mantığı (placeholder):
+            target_t = self.get_staircase_target(i)
             
-            fuel_demand = (f_val - 16) * 6
-            temp_demand = (self.temp - 1420) * 1.0
+            # Basit bir P-Kontrolcü mantığı ile test (MPC yerine):
+            fuel_cmd = 16.0 + (target_t - self.temp) * 0.5
+            fan_cmd = 950.0 + (self.o2 - 3.2) * 100
             
-            v_target = 1000 + fuel_demand + temp_demand
-            v_val = np.clip(v_target + np.random.normal(0, 1.0), 900, 1100)
-            
-            self.step(f_val, v_val)
+            self.step(fuel_cmd, fan_cmd)
 
         return pd.DataFrame(self.data)

@@ -1,115 +1,96 @@
 import os
-import sys
-import yaml
-import pandas as pd
-import numpy as np
-import multiprocessing
 import logging
-
-# Kendi modüllerimiz
-from src.rl.rl import train_rl
-from src.mpc.mpc import MPC
+import pandas as pd
+import yaml
 from src.dt.dt import RotaryKilnDigitalTwin
+from src.mpc.mpc import MPC
+from src.rl.rl import train_rl
 
-# =========================================================
-# LOGGER YAPILANDIRMASI
-# =========================================================
-logger = logging.getLogger("ORCHESTRATOR")
-logger.setLevel(logging.INFO)
+# ---------------- LOGGING AYARI ----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter("[%(asctime)s] %(levelname)s - %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
-# =========================================================
-# ALTYAPI VE DOSYA KONTROLÜ
-# =========================================================
-def check_and_prepare_infrastructure():
-    dirs = ["models", "data", "logs", "experiments/plots", "models/checkpoints"]
-    for d in dirs:
-        os.makedirs(d, exist_ok=True)
-
-    critical_files = [
-        "src/dt/dt.py",
-        "src/rl/rl.py",
-        "src/mpc/mpc.py",
-        "config.yaml"
-    ]
-
-    missing = [f for f in critical_files if not os.path.exists(f)]
-    if missing:
-        logger.error(f"Kritik dosyalar eksik: {missing}")
-        sys.exit(1)
-
-    logger.info("Altyapı hazır, dosyalar doğrulandı.")
-
-# =========================================================
-# CONFIG YÜKLEME
-# =========================================================
-def load_config():
-    with open("config.yaml", "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-        logger.info("Config dosyası başarıyla yüklendi.")
-        return cfg
-
-# =========================================================
-# MPC BENCHMARK (Opsiyonel - Gürültü Analizi İçin)
-# =========================================================
-def generate_pure_mpc_benchmark(config, path="data/pure_mpc_results.csv"):
-    if os.path.exists(path):
-        logger.info(f"MPC benchmark zaten mevcut, geçiliyor... -> {path}")
-        return
-
-    logger.info("MPC Benchmark başlatılıyor (Gürültü analizi)...")
-    plant = RotaryKilnDigitalTwin(seed=42)
+def generate_pure_mpc_benchmark(config):
+    """
+    Sabit 1450°C Benchmark Senaryosu.
+    Fırın 1450'de başlar, hedef hep 1450'dir.
+    """
+    logger.info("--- 24 Saatlik SABİT 1450°C MPC Analizi Başlatılıyor ---")
+    
+    # 1. Dijital İkiz Kurulumu
+    # NOT: dt.py içindeki reset() metodunda temp=1450 yaptığından emin ol!
+    plant = RotaryKilnDigitalTwin(config=config, seed=42)
+    
+    # 2. MPC Kontrolcü Kurulumu
     mpc = MPC(config)
-    history = []
+    
+    # Zaman parametreleri
+    step_sec = config["system"]["step_duration_sec"]
+    total_steps = int(24 * 3600 / step_sec) # 24 saat
+    
+    logger.info(f"Simülasyon toplam {total_steps} adım sürecek.")
 
-    for i in range(3000):
-        u_fuel, u_fan = mpc.optimize(plant)
-        result = plant.step(u_fuel, u_fan)
+    for i in range(total_steps):
+        # HEDEF SABİT 1450
+        current_target = 1450.0
         
-        temp = result["Temperature"]
-        o2 = result["O2"]
-        error = temp - config["system"]["setpoint"]
+        # MPC Karar Mekanizması
+        try:
+            fuel_cmd, fan_cmd = mpc.optimize(plant, current_target)
+        except Exception as e:
+            logger.error(f"MPC Optimizasyon Hatası (Adım {i}): {e}")
+            break
+            
+        # Simülasyonda Adım At
+        result = plant.step(fuel_cmd, fan_cmd)
+        
+        # Terminal Loglama (Her 120 dakikada bir - 2 saatte bir)
+        # 5 sn adım için 120 dk = 1440 adım
+        if i % 1440 == 0:
+            current_min = (i * step_sec) / 60
+            logger.info(
+                f"Dakika: {int(current_min):4d} | "
+                f"Sıcaklık: {result['Temperature']:.2f}°C | "
+                f"Yakıt: {result['Fuel']:.2f} | "
+                f"O2: {result['O2']:.2f}%"
+            )
 
-        history.append({
-            "step": i, "temp": temp, "fuel": u_fuel, 
-            "fan": u_fan, "o2": o2, "error": error
-        })
+    # Verileri Kaydet
+    if not os.path.exists("data"):
+        os.makedirs("data")
+        
+    df = pd.DataFrame(plant.data)
+    output_path = "data/pure_mpc_results_1450_fixed.csv"
+    df.to_csv(output_path, index=False)
+    logger.info(f"Benchmark tamamlandı: {output_path}")
 
-        if i % 500 == 0:
-            logger.info(f"[MPC Benchmark] Step: {i}, Temp: {temp:.2f}, Error: {error:.2f}")
+def load_config(path="config.yaml"):
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
 
-    pd.DataFrame(history).to_csv(path, index=False)
-    logger.info("MPC Benchmark tamamlandı ve kaydedildi.")
-
-# =========================================================
-# ANA ÇALIŞTIRICI (MAIN)
-# =========================================================
 if __name__ == "__main__":
-    # Windows sistemlerde multiprocessing hatasını önlemek için kritik
-    multiprocessing.freeze_support()
-    
-    # 1. Hazırlık
-    check_and_prepare_infrastructure()
-    config = load_config()
-    
-    # 2. Benchmark (Eğer data/pure_mpc_results.csv yoksa çalışır)
-    generate_pure_mpc_benchmark(config)
-
-    # 3. RL EĞİTİMİNİ BAŞLAT
-    # Bu fonksiyon src/rl/rl.py içindedir ve SubprocVecEnv, make_env, PPO 
-    # gibi tüm süreçleri config'e göre otomatik yönetir.
     try:
-        logger.info("Hibrit (MPC+RL) Eğitim süreci başlatılıyor...")
-        train_rl(config)
-        logger.info("Sistem eğitimi başarıyla tamamladı.")
-        
-    except KeyboardInterrupt:
-        logger.warning("Eğitim kullanıcı tarafından durduruldu.")
+        # 1. Config Yükle
+        cfg = load_config()
+        logger.info("Config yüklendi.")
+
+        # 2. Klasör yapısını kontrol et
+        for folder in ["data", "models", "logs"]:
+            if not os.path.exists(folder):
+                os.makedirs(folder)
+
+        # 3. MPC Benchmark Çalıştır (Sabit 1450)
+        generate_pure_mpc_benchmark(cfg)
+
+        # 4. RL Eğitimi (Hardware hatasını config'e eklediysen burası çalışır)
+        # Eğer sadece MPC görmek istiyorsan alt satırı yorum satırı yapabilirsin.
+        # train_rl(cfg)
+
+    except FileNotFoundError:
+        logger.error("config.yaml bulunamadı!")
     except Exception as e:
-        logger.error(f"Sistem hatası: {e}")
-        raise
+        logger.error(f"Ana döngüde kritik hata: {e}")
