@@ -1,65 +1,35 @@
-# ==========================================
-# 1. PHYSICAL PLANT & OPERATIONAL LIMITS
-# ==========================================
-plant: 
-  seed: 42
-  temp_min: 1200.0
-  temp_max: 1700.0
-  fuel_min: 10.0
-  fuel_max: 27.0
-  fan_min: 850.0
-  fan_max: 1100.0
+plant:
+  seed: null
 
-# ==========================================
-# 2. HARDWARE & INFRASTRUCTURE
-# ==========================================
+system:
+  step_duration_sec: 5
+  setpoint: 1450.0
+  target_o2: 2.25
+
+mpc:
+  
+  initial_fuel: 14.0        # Bu satırı ekle
+  initial_fan: 950.0         # Muhtemelen buna da ihtiyacı olacak, bunu da ekle
+  prediction_horizon: 80
+  control_horizon: 10
+  
+  fuel_min: 0.0
+  fuel_max: 50.0
+  max_delta_fuel: 0.20
+  
+  fan_min: 500.0
+  fan_max: 2200.0
+  max_delta_fan: 45.0
+
+  weight_temp: 5500
+  weight_o2: 9500
+  weight_fuel_chg: 1500
+  weight_fan_chg: 300
+
+kalman:
+  process_noise: 0.0001
+  measurement_noise: 0.1
+
 hardware:
   num_cpu: 11
   device: "auto"
-
-# ==========================================
-# 3. OPERATIONAL TARGETS (SYSTEM)
-# ==========================================
-system:
-  step_duration_sec: 5      # Her simülasyon adımı 5 saniye
-  setpoint: 1450.0          # Hedef fırın sıcaklığı (°C)
-  target_o2: 2.5            # Hedef oksijen yüzdesi (%)
-
-# ==========================================
-# 4. MPC (MODEL PREDICTIVE CONTROL) SETTINGS
-# ==========================================
-mpc:
-  # Zaman Ayarları (Ufuk Ayarları)
-  prediction_horizon: 90    
-  control_horizon: 6        
-  
-  # Yakıt (Fuel) Kontrol Parametreleri
-  initial_fuel: 14.0
-  fuel_min: 10.0            # Plant limitleriyle eşleşmeli
-  fuel_max: 32.0            
-  max_delta_fuel: 0.15      # Bir adımda yapılabilecek max yakıt değişimi
-  
-  # Fan (Hava) Kontrol Parametreleri
-  initial_fan: 950.0
-  fan_min: 850.0            # Plant limitleriyle eşleşmeli
-  fan_max: 1100.0           
-  max_delta_fan: 10.0
-
-  # Ağırlıklar (Tuning - Cezalandırma)
-  # Katsayılar arasındaki denge kuruldu (Ters bağlanma etkisi giderildi)
-  weight_temp: 4000        # Sıcaklık hatası cezası (20000 çok fazlaydı, 100 idealdir)
-  weight_o2: 10.0           # O2 hatası cezası
-  weight_fuel_chg: 200      # Yakıtın titremesini engelleyen yumuşatma cezası
-  weight_fan_chg: 1.0       # Fan değişim cezası
-
-# ==========================================
-# 5. ESTIMATION & PATHS
-# ==========================================
-kalman:
-  process_noise: 0.0001    # Daha küçük = Daha düz (stabil) filtre
-  measurement_noise: 0.1   # Daha büyük = Sensör gürültüsünü daha çok siler
-
-paths:
-  model_save_path: "models/ppo_rotary_kiln_residual"
-  log_path: "logs/"
-  output_csv: "data/mpc_results.csv"

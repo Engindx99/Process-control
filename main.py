@@ -87,9 +87,9 @@ def generate_mpc_benchmark(config):
 
 if __name__ == "__main__":
     try:
-        # Config dosyasını yükle
-        with open("config.yaml", "r") as f:
-            cfg = yaml.safe_load(f)
+        # main.py içindeki ilgili satırı bul ve encoding='utf-8' ekle:
+        with open("config.yaml", "r", encoding="utf-8") as f:
+           cfg = yaml.safe_load(f)
         
         # Simülasyonu başlat
         generate_mpc_benchmark(cfg)

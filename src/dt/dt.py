@@ -90,7 +90,7 @@ class RotaryKilnPlant:
 
         self.pressure += (1.0 / self.tau_pressure) * (pressure_target - self.pressure)
 
-        self.noise_pressure = 0.9 * self.noise_pressure + np.random.normal(0, 0.02)
+        self.noise_pressure = 0.4 * self.noise_pressure + np.random.normal(0, 0.02)
         self.pressure += self.noise_pressure
 
         self.pressure = np.clip(self.pressure, -6.0, -1.0)
@@ -104,7 +104,7 @@ class RotaryKilnPlant:
         o2_sink = 0.055 * fuel * eff
         mixing = (2.6 - self.o2) / self.tau_gas
 
-        self.noise_o2 = 0.9 * self.noise_o2 + np.random.normal(0, 0.02)
+        self.noise_o2 = 0.4 * self.noise_o2 + np.random.normal(0, 0.02)
 
         self.o2 += 0.08 * (O2_in - o2_sink + mixing + self.k_leak)
         self.o2 += self.noise_o2
@@ -118,7 +118,7 @@ class RotaryKilnPlant:
         # =========================
         # TEMPERATURE
         # =========================
-        baseline_heat = 914
+        baseline_heat = 754
 
         heat_gen = fuel * self.k_heat * eff + baseline_heat
         heat_loss = 0.0004 * self.fan * (self.temp - 25)
@@ -127,7 +127,7 @@ class RotaryKilnPlant:
 
         self.temp += 0.004 * net_heat
 
-        self.noise_temp = 0.6 * self.noise_temp + np.random.normal(0, 0.05)
+        self.noise_temp = 0.4 * self.noise_temp + np.random.normal(0, 0.04)
         self.temp += self.noise_temp
 
         self.temp = np.clip(self.temp, 1200.0, 1650.0)

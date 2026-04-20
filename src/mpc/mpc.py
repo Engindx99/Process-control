@@ -83,7 +83,7 @@ class MPC:
             self.objective_function, u0, 
             args=(current_state, current_history),
             method='SLSQP', bounds=bounds,
-            options={'maxiter': 10, 'ftol': 1e-4}
+            options={'maxiter': 7, 'ftol': 1e-4}
         )
         
         target_u = res.x.reshape(-1, 2)[0]
