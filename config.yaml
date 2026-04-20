@@ -1,5 +1,5 @@
 plant:
-  seed: null
+  seed: null  # Gürültü testleri için dinamik yapı korunuyor
 
 system:
   step_duration_sec: 5
@@ -7,29 +7,30 @@ system:
   target_o2: 2.25
 
 mpc:
-  
-  initial_fuel: 14.0        # Bu satırı ekle
-  initial_fan: 950.0         # Muhtemelen buna da ihtiyacı olacak, bunu da ekle
+  initial_fuel: 14.0
+  initial_fan: 950.0
   prediction_horizon: 80
   control_horizon: 10
   
-  fuel_min: 0.0
-  fuel_max: 50.0
-  max_delta_fuel: 0.20
+  # --- LİMİTLER (Trial 24 ve Optuna İnce Ayarları) ---
+  fuel_min: 5.0
+  fuel_max: 45.0
+  max_delta_fuel: 0.0987  # Optuna'nın bulduğu tam değer: 0.09875
   
-  fan_min: 500.0
-  fan_max: 2200.0
-  max_delta_fan: 45.0
+  fan_min: 700.0
+  fan_max: 1800.0
+  max_delta_fan: 27.3799  # Optuna'nın bulduğu tam değer: 27.3799
 
-  weight_temp: 5500
-  weight_o2: 9500
-  weight_fuel_chg: 1500
-  weight_fan_chg: 300
+  # --- AĞIRLIKLAR (Trial 24 - 0.52 MAE Şampiyonu) ---
+  weight_temp: 5184.51    # Sıcaklık takibi için ideal baskı
+  weight_o2: 3170.37      # O2 dengesi
+  weight_fuel_chg: 13254.48 # Yakıt vanası stabilitesi (Süper Kararlı)
+  weight_fan_chg: 340.47    # Fan devri oynamalarına esneklik tanındı
 
 kalman:
   process_noise: 0.0001
   measurement_noise: 0.1
 
 hardware:
-  num_cpu: 11
+  num_cpu: 1 
   device: "auto"
