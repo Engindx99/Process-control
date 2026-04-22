@@ -7,7 +7,8 @@ python -m Bayesian_optimization.optuna_study
 
 python -m experiments.analysis.visualizations.eva
 
-python -m experiments.analysis.visualizations.dt_plot
+cd ~/Rotary_klin
+PYTHONPATH=src python -m experiments.analysis.visualizations.plot_burning_zone
 
 python -m src.filters.test_kalman
 

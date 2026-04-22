@@ -1,65 +1,56 @@
 import matplotlib.pyplot as plt
 import pandas as pd
-from src.dt.dt import RotaryKilnPlant
+import numpy as np
+from burning_zone.burning_zone import RotaryKilnPlant
 
-# ==========================================
-# UYUMLU CONFIGURATION (24 SAAT ANALİZİ)
-# ==========================================
-EPISODES = 1
-STEP_DURATION = 5          # DİĞER KODLARLA UYUMLU: Her adım 5 saniye
-TOTAL_MINUTES = 1440       # Hedeflenen toplam dakika (24 saat)
-# UYUMLU ADIM SAYISI: (1440 dk * 60 sn) / 5 sn = 17280 adım
-STEPS = int((TOTAL_MINUTES * 60) / STEP_DURATION) 
-
+# --- Ayarlar ---
+TOTAL_MINUTES = 360
+STEPS = TOTAL_MINUTES * 60  # 1 sn adımlarla
 SETPOINT_TEMP = 1450
-TARGET_O2 = 2.5
 
-for ep in range(EPISODES):
-    # 1. Veri Üretimi (Mevcut Plant yapına tam uyumlu)
-    plant = RotaryKilnPlant(seed=None)  
-    # 17280 adım çalıştırarak gerçek bir 24 saat simüle ediyoruz
-    df = plant.run(steps=STEPS)
+# 1. Veri Üretimi
+plant = RotaryKilnPlant(seed=None)
+df = plant.run(steps=STEPS)
 
-    # 2. Zamansal Dönüşüm (X ekseni 0'dan 1440 dakikaya akacak)
-    t_min = (df["step"] * STEP_DURATION) / 60
+# 2. Hesaplamalar
+t_min = (df["step"]) / 60
+# Verimlilik hesapla
+df["efficiency"] = df["o2"].apply(lambda x: 1.0 / (1.0 + np.exp(-(x - 2.5))) * 100)
 
-    # =========================
-    # TEMPERATURE PLOT (24 SAAT)
-    # =========================
-    plt.figure(figsize=(15, 6))
-    plt.plot(t_min, df["temp"], color='tab:red', linewidth=0.8, label="Fırın Sıcaklığı")
-    plt.axhline(y=SETPOINT_TEMP, color='black', linestyle='--', alpha=0.7, label=f"Hedef ({SETPOINT_TEMP}°C)")
-    
-    plt.title(f"24 Saatlik Sıcaklık Analizi ({TOTAL_MINUTES} Dakika) - Episode {ep+1}")
-    plt.xlabel("Zaman (Dakika)")
-    plt.ylabel("Sıcaklık (°C)")
-    
-    # Senin istediğin y-ekseni ayarı
-    plt.yticks(range(1400, 1501, 25))
-    plt.xlim(0, TOTAL_MINUTES)
-    
-    plt.grid(True, which='both', linestyle=':', alpha=0.5)
-    plt.legend(loc='upper right')
-    plt.tight_layout()
-    plt.show()
+# İLİŞKİYİ GÖRÜNÜR KILAN ADIM: Hareketli Ortalama (Smoothing)
+# Son 5 dakikanın (300 saniye) ortalamasını alarak gürültüyü temizliyoruz
+df["eff_smooth"] = df["efficiency"].rolling(window=300).mean()
 
-    # =========================
-    # O2 & PRESSURE PLOTS
-    # =========================
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 8), sharex=True)
+# --- GÖRSELLEŞTİRME (TEK PANEL, ÇİFT EKSEN) ---
+fig, ax1 = plt.subplots(figsize=(15, 7))
 
-    # O2 Dinamiği
-    ax1.plot(t_min, df["o2"], color='tab:blue', linewidth=0.8)
-    ax1.axhline(y=TARGET_O2, color='green', linestyle=':', label="Hedef O2")
-    ax1.set_ylabel("O2 (%)")
-    ax1.set_title("24 Saatlik Oksijen ve Basınç Değişimi")
-    ax1.grid(True, alpha=0.3)
+# Sol Eksen: Sıcaklık
+color_temp = 'tab:red'
+ax1.set_xlabel('Zaman (Dakika)', fontsize=12)
+ax1.set_ylabel('Sıcaklık (°C)', color=color_temp, fontsize=12, fontweight='bold')
+line1 = ax1.plot(t_min, df["temp"], color=color_temp, linewidth=1.5, label="Fırın Sıcaklığı")
+ax1.axhline(y=SETPOINT_TEMP, color='black', linestyle='--', alpha=0.5)
+ax1.tick_params(axis='y', labelcolor=color_temp)
+ax1.set_ylim(1400, 1500) # İlişkiyi görmek için zum yapıyoruz
 
-    # Basınç Dinamiği
-    ax2.plot(t_min, df["pressure"], color='tab:gray', linewidth=0.8)
-    ax2.set_ylabel("Basınç (Pa)")
-    ax2.set_xlabel("Zaman (Dakika)")
-    ax2.grid(True, alpha=0.3)
+# Sağ Eksen: Verimlilik
+ax2 = ax1.twinx() 
+color_eff = 'tab:green'
+ax2.set_ylabel('Düzleştirilmiş Verimlilik (%)', color=color_eff, fontsize=12, fontweight='bold')
+# Orijinal veriyi çok silik arka planda, düzleştirilmiş veriyi net gösteriyoruz
+ax2.plot(t_min, df["efficiency"], color=color_eff, alpha=0.1) 
+line2 = ax2.plot(t_min, df["eff_smooth"], color=color_eff, linewidth=2, label="Düzleştirilmiş Verimlilik (5dk Ort)")
+ax2.tick_params(axis='y', labelcolor=color_eff)
+ax2.set_ylim(20, 60) # Verimlilik aralığını grafiğe göre daraltıyoruz
 
-    plt.tight_layout()
-    plt.show()
+# Estetik Ayarlar
+plt.title("Yanma Verimliliği ve Sıcaklık Arasındaki Dinamik İlişki", fontsize=14)
+ax1.grid(True, linestyle=':', alpha=0.6)
+
+# Lejant Birleştirme
+lines = line1 + line2
+labels = [l.get_label() for l in lines]
+ax1.legend(lines, labels, loc='upper left')
+
+plt.tight_layout()
+plt.show()
