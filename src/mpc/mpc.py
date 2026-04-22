@@ -1,14 +1,10 @@
+import casadi as ca
 import numpy as np
 import yaml
-import logging
-from scipy.optimize import minimize
 from typing import Union, Dict, Any
 
 class MPC:
     def __init__(self, config_input: Union[str, Dict[str, Any]] = "config.yaml"):
-        self.logger = logging.getLogger("MPC_Module")
-        
-        # --- Config Yükleme ---
         if isinstance(config_input, dict):
             self.cfg = config_input
         else:
@@ -18,121 +14,106 @@ class MPC:
         mpc_cfg = self.cfg.get("mpc", {})
         sys_cfg = self.cfg.get("system", {})
 
-        # --- Kontrol Parametreleri ---
-        self.Np = int(mpc_cfg.get("prediction_horizon", 80))
-        self.Nc = int(mpc_cfg.get("control_horizon", 10))
+        # --- GÜNCEL HORIZONLAR ---
+        self.Np = int(mpc_cfg.get("prediction_horizon", 200)) # Artık 200
+        self.Nc = int(mpc_cfg.get("control_horizon", 20))    # Artık 20
         self.set_temp = float(sys_cfg.get("setpoint", 1450.0))
-        self.set_o2 = float(sys_cfg.get("target_o2", 2.25))
-
-        # --- Sınırlar ---
-        self.fuel_min = float(mpc_cfg.get("fuel_min", 5.0))
-        self.fuel_max = float(mpc_cfg.get("fuel_max", 45.0))
-        self.fan_min = float(mpc_cfg.get("fan_min", 700.0))
-        self.fan_max = float(mpc_cfg.get("fan_max", 1800.0))
+        self.set_o2 = float(sys_cfg.get("target_o2", 2.2))
         
-        # --- Dinamik Ağırlıklar (Config'den veya Varsayılan) ---
-        self.W_temp = float(mpc_cfg.get("weight_temp", 5184.0))
-        self.W_o2 = float(mpc_cfg.get("weight_o2", 3170.0))
-        self.W_fuel_chg = float(mpc_cfg.get("weight_fuel_chg", 13254.0))
-        self.W_fan_chg = float(mpc_cfg.get("weight_fan_chg", 340.0))
+        # Sabitler ve Sınırlar
+        self.inertia = 0.993
+        self.k_heat_avg = 25.0
+        self.k_leak_ref = 0.015
+        self.fuel_min, self.fuel_max = 0.0, 120.0
+        self.fan_min, self.fan_max = 500.0, 3500.0
+        self.max_df = float(mpc_cfg.get("max_delta_fuel", 0.15))
+        self.max_dfan = float(mpc_cfg.get("max_delta_fan", 30.0))
 
-        # Başlangıç Durumları
-        self.last_fuel = float(mpc_cfg.get("initial_fuel", 14.0))
+        # Optuna'dan gelen dinamik ağırlıklar
+        self.W_temp = float(mpc_cfg.get("weight_temp", 1000000.0))
+        self.W_o2 = float(mpc_cfg.get("weight_o2", 300.0))
+        self.W_fuel_chg = float(mpc_cfg.get("weight_fuel_chg", 75000.0))
+        self.W_fan_chg = float(mpc_cfg.get("weight_fan_chg", 15000.0))
+
+        self.last_fuel = float(mpc_cfg.get("initial_fuel", 23.0))
         self.last_fan = float(mpc_cfg.get("initial_fan", 950.0))
 
-    def internal_model_step(self, state, u, fuel_history):
-        """İç model: Plant ile senkronize dinamikler."""
-        temp, o2 = state
-        fuel_cmd, fan_cmd = u
-        
-        # Gecikmeli yakıt etkisini simüle et
-        eff_fuel = fuel_history[0] if len(fuel_history) > 0 else fuel_cmd
-        new_history = fuel_history[1:] + [fuel_cmd] if len(fuel_history) > 0 else [fuel_cmd]
+        self._setup_solver()
 
-        # Yanma Verimi (Sigmoid)
-        eff = 1.0 / (1.0 + np.exp(-(o2 - 2.5)))
+    def _setup_solver(self):
+        self.opti = ca.Opti()
         
-        # Isı ve O2 Dengesi (Plant ile tam uyumlu katsayılar)
-        heat_gen = (eff_fuel * 22.0 * eff + 754.0) / 3200.0
-        heat_loss = (0.0004 * fan_cmd * (temp - 25.0)) / 3200.0
-        new_temp = temp + 0.004 * (heat_gen - heat_loss)
+        # Değişken boyutları yeni Nc ve Np değerlerine göre otomatik ayarlanır
+        self.U = self.opti.variable(2, self.Nc)
+        self.X = self.opti.variable(2, self.Np + 1)
         
-        o2_in = 0.21 * (1.0 + 0.002 * (fan_cmd - 950.0))
-        o2_sink = 0.055 * eff_fuel * eff
-        new_o2 = o2 + 0.08 * (o2_in - o2_sink + (2.6 - o2)/6.0 + 0.02)
-        
-        return [new_temp, np.clip(new_o2, 0.5, 5.0)], new_history
+        self.P_current_state = self.opti.parameter(2)
+        self.P_fuel_hist = self.opti.parameter(15) 
+        self.P_last_u = self.opti.parameter(2)
 
-    def objective_function(self, u_sequence, current_state, current_history):
-        """Normalize edilmiş maliyet fonksiyonu."""
-        cost = 0.0
-        state = list(current_state)
-        history = list(current_history)
-        u_pairs = u_sequence.reshape(-1, 2)
-        u_prev = [self.last_fuel, self.last_fan]
+        self.opti.subject_to(self.X[:, 0] == self.P_current_state)
 
-        for i in range(self.Np):
-            # Kontrol ufkundan sonrasını sabit tut (NC sonrası)
-            idx = i if i < self.Nc else self.Nc-1
-            u_curr = u_pairs[idx]
+        for k in range(self.Np):
+            u_k = self.U[:, k] if k < self.Nc else self.U[:, self.Nc-1]
+            temp_k = self.X[0, k]
+            o2_k = self.X[1, k]
             
-            state, history = self.internal_model_step(state, u_curr, history)
+            if k < 15:
+                eff_fuel = self.P_fuel_hist[k]
+            else:
+                idx = k - 15
+                eff_fuel = self.U[0, idx] if idx < self.Nc else self.U[0, self.Nc-1]
+
+            # Fırın Termodinamik Denklemleri
+            eff = 1.0 / (1.0 + ca.exp(-(o2_k - 2.0) * 4))
+            temp_rate = (eff_fuel * self.k_heat_avg * eff - (0.0003 * u_k[1] * (temp_k - 25.0) + 1.0)) / 1800.0 
+            next_temp = (self.inertia * temp_k) + (1 - self.inertia) * (temp_k + temp_rate)
+            next_o2 = o2_k + 0.1 * (0.21 * (1.0 + 0.002 * (u_k[1] - 950.0)) - 0.06 * eff_fuel * eff + (2.6 - o2_k)/6.0 + self.k_leak_ref)
             
-            # --- NORMALİZASYON ---
-            # Sıcaklık farkı / 100, O2 farkı doğrudan kare
-            cost += self.W_temp * ((state[0] - self.set_temp) / 100.0)**2
-            cost += self.W_o2 * (state[1] - self.set_o2)**2
-            
-            if i < self.Nc:
-                # Kontrol değişim cezaları
-                cost += self.W_fuel_chg * (u_curr[0] - u_prev[0])**2
-                cost += self.W_fan_chg * ((u_curr[1] - u_prev[1]) / 100.0)**2
-                u_prev = u_curr
-                
-        return cost
+            self.opti.subject_to(self.X[0, k+1] == next_temp)
+            self.opti.subject_to(self.X[1, k+1] == next_o2)
+
+        # Objective
+        obj = self.W_temp * ca.sumsqr(self.X[0, 1:] - self.set_temp) + \
+              self.W_o2 * ca.sumsqr(self.X[1, 1:] - self.set_o2) + \
+              self.W_fuel_chg * ca.sumsqr(self.U[0, 0] - self.P_last_u[0]) + \
+              self.W_fan_chg * ca.sumsqr(self.U[1, 0] - self.P_last_u[1]) + \
+              self.W_fuel_chg * ca.sumsqr(self.U[0, 1:] - self.U[0, :-1]) + \
+              self.W_fan_chg * ca.sumsqr(self.U[1, 1:] - self.U[1, :-1])
+
+        self.opti.minimize(obj)
+        self.opti.subject_to(self.opti.bounded(self.fuel_min, self.U[0, :], self.fuel_max))
+        self.opti.subject_to(self.opti.bounded(self.fan_min, self.U[1, :], self.fan_max))
+        
+        # Değişim Sınırları
+        self.opti.subject_to(self.opti.bounded(-self.max_df, self.U[0, 0] - self.P_last_u[0], self.max_df))
+        self.opti.subject_to(self.opti.bounded(-self.max_dfan, self.U[1, 0] - self.P_last_u[1], self.max_dfan))
+
+        # --- KRİTİK ÇÖZÜCÜ AYARLARI ---
+        opts = {
+            "ipopt.print_level": 0, 
+            "print_time": 0, 
+            "ipopt.max_iter": 80,    # 20'den 80'e çıktı (Geniş ufuk için şart)
+            "ipopt.tol": 1e-3,      # Daha dengeli bir tolerans
+            "ipopt.acceptable_tol": 1e-2,
+            "ipopt.warm_start_init_point": "yes" # Hız için warm start
+        }
+        self.opti.solver("ipopt", opts)
 
     def get_action(self, current_temp, current_o2, fuel_history):
-        """Optimizasyon çözücü ve aksiyon üretici."""
-        current_state = [float(current_temp), float(current_o2)]
+        self.opti.set_value(self.P_current_state, ca.vertcat(current_temp, current_o2))
+        self.opti.set_value(self.P_fuel_hist, ca.vertcat(*list(fuel_history)))
+        self.opti.set_value(self.P_last_u, ca.vertcat(self.last_fuel, self.last_fan))
         
-        # Emniyet Sınırları
-        self.last_fuel = np.clip(self.last_fuel, self.fuel_min, self.fuel_max)
-        self.last_fan = np.clip(self.last_fan, self.fan_min, self.fan_max)
+        try:
+            sol = self.opti.solve()
+            # Warm start için initial değerleri bir sonraki adıma hazırla
+            self.opti.set_initial(self.U, sol.value(self.U))
+            self.opti.set_initial(self.X, sol.value(self.X))
+            
+            u_res = sol.value(self.U[:, 0])
+            self.last_fuel, self.last_fan = float(u_res[0]), float(u_res[1])
+        except:
+            pass 
 
-        # Başlangıç tahmini ve Sınırlar (Nc kadar tile)
-        u0 = np.tile([self.last_fuel, self.last_fan], self.Nc)
-        bounds = [(self.fuel_min, self.fuel_max), (self.fan_min, self.fan_max)] * self.Nc
-        
-        # Çözücü Ayarları (Daha önce konuştuğumuz 20 iter / 1e-5 tol)
-        res = minimize(
-            self.objective_function, u0, 
-            args=(current_state, list(fuel_history)),
-            method='SLSQP', 
-            bounds=bounds,
-            options={
-                'maxiter': 20, 
-                'ftol': 1e-5,
-                'disp': False 
-            } 
-        )
-        
-        # Çözüm analizi
-        if res.success:
-            target_u = res.x.reshape(-1, 2)[0]
-        else:
-            # Başarısızlık durumunda NaN değilse sonucu kabul et, NaN ise sabit kal
-            target_u = res.x.reshape(-1, 2)[0] if not np.isnan(res.x).any() else [self.last_fuel, self.last_fan]
-        
-        # Dinamik Delta Limitleri (Config'den beslenir)
-        max_d_fuel = float(self.cfg["mpc"].get("max_delta_fuel", 0.098))
-        max_d_fan = float(self.cfg["mpc"].get("max_delta_fan", 27.0))
-
-        # Değişim miktarını kısıtla (Delta Clipping)
-        df = np.clip(target_u[0] - self.last_fuel, -max_d_fuel, max_d_fuel)
-        dfan = np.clip(target_u[1] - self.last_fan, -max_d_fan, max_d_fan)
-        
-        # Son aksiyonu güncelle ve sınırla
-        self.last_fuel = np.clip(self.last_fuel + df, self.fuel_min, self.fuel_max)
-        self.last_fan = np.clip(self.last_fan + dfan, self.fan_min, self.fan_max)
-        
-        return float(self.last_fuel), float(self.last_fan)
+        return self.last_fuel, self.last_fan

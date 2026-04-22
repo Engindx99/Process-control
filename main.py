@@ -7,88 +7,84 @@ from src.dt.dt import RotaryKilnPlant
 from src.mpc.mpc import MPC 
 from src.filters.kalman import SelectiveKalmanFilter
 
-# Logging yapılandırması
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def run_production_simulation():
+def run_high_resolution_simulation():
     """
-    Optuna'dan elde edilen en iyi parametrelerle 
-    fırını gerçek zamanlı simülasyon modunda çalıştırır.
+    6 Saatlik Simülasyon: 
+    - 1sn çözünürlükte veri takibi (21600 step)
+    - 10sn çözünürlükte MPC kontrolü (2160 kontrol sinyali)
     """
     
-    # 1. Güncel Config'i Yükle (Trial 24 Değerleri İçeride)
     with open("config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    # 2. Bileşenleri Başlat
-    plant = RotaryKilnPlant(seed=None) # Test için gürültü açık
+    # Bileşenler
+    plant = RotaryKilnPlant(seed=None) 
     obs = plant.reset() 
     
     mpc = MPC(config) 
-    # Başlangıç değerlerini eşitle
-    mpc.last_fuel = float(obs['fuel'])
-    mpc.last_fan = float(obs['fan'])
-    
     kf = SelectiveKalmanFilter(config) 
     
-    # Simülasyon Ayarları (120 Dakika = 1440 Step)
-    total_steps = 1440  
+    # Simülasyon Parametreleri
+    total_seconds = 21600
+    control_interval = 10  # MPC her 10 saniyede bir çalışacak
     history = []
     
-    print(f"🚀 Fırın 'Altın Reçete' ile Yayına Alındı | Hedef: {config['system']['setpoint']}°C")
+    # Başlangıç aksiyonları
+    fuel_cmd = float(obs['fuel'])
+    fan_cmd = float(obs['fan'])
 
-    # 3. Ana Döngü
-    for i in range(total_steps):
-        # Filtreleme
+    print(f"🚀 MULTIRATE SIMÜLASYON BAŞLADI")
+    print(f"📊 Veri Takibi: {total_seconds} step | Kontrol Periyodu: {control_interval}s")
+
+    for t in range(total_seconds):
+        # 1. KALMAN GÜNCELLEME (Her saniye veri okuyoruz)
         kf.update(obs['o2'], obs['pressure'])
         
-        try:
-            # MPC Karar Mekanizması (Trial 24 Ağırlıkları Kullanılıyor)
-            fuel_cmd, fan_cmd = mpc.get_action(
-                current_temp=obs['temp'], 
-                current_o2=obs['o2'], 
-                fuel_history=plant.history_fuel
-            ) 
-        except Exception as e:
-            logger.error(f"Kritik Hata - Step {i}: {e}")
-            break
-            
-        # Dünyayı (Plant) Bir Adım İlerlet
+        # 2. MPC KONTROLÜ (Sadece 10 saniyede bir çalışır)
+        if t % control_interval == 0:
+            try:
+                fuel_cmd, fan_cmd = mpc.get_action(
+                    current_temp=obs['temp'], 
+                    current_o2=obs['o2'], 
+                    fuel_history=plant.history_fuel
+                )
+            except Exception as e:
+                logger.error(f"MPC Hatası - Saniye {t}: {e}")
+                break
+        
+        # 3. DİNAMİK MODEL ADIMI (Her saniye ilerliyor)
+        # Not: plant.step fonksiyonun 1sn mi yoksa 5sn mi ilerlediği 
+        # DT sınıfının içindeki dt parametresine bağlıdır. 
         obs = plant.step(fuel_cmd, fan_cmd)
         
-        # Verileri Kaydet
+        # 4. KAYIT
         history.append({
-            'step': i,
+            'second': t,
             'temp': obs['temp'],
             'o2': obs['o2'],
             'fuel': fuel_cmd,
             'fan': fan_cmd,
+            'is_control_step': (t % control_interval == 0),
             'error': abs(obs['temp'] - config['system']['setpoint'])
         })
 
-        # Her 10 dakikada bir (120 step) durum raporu
-        if i % 120 == 0:
-            current_mae = np.mean([h['error'] for h in history])
-            print(f"⏱️ Dakika {i//12}: Sıcaklık: {obs['temp']:.2f}°C | MAE: {current_mae:.4f}")
+        # Raporlama (Her 1 saatte bir)
+        if t % 3600 == 0 and t > 0:
+            avg_mae = np.mean([h['error'] for h in history])
+            print(f"⏱️ Saat {t//3600}: Sıcaklık: {obs['temp']:.2f}°C | Kümülatif MAE: {avg_mae:.4f}")
 
-    # 4. Performans Analizi ve Raporlama
+    # Analiz ve Kayıt
     df = pd.DataFrame(history)
-    final_mae = df['error'].mean()
-    
-    print("\n" + "="*30)
-    print(f"🏆 SİMÜLASYON TAMAMLANDI")
-    print(f"📊 Ortalama Hata (MAE): {final_mae:.4f}")
-    print(f"🔥 Yakıt Ortalaması: {df['fuel'].mean():.2f}")
-    print(f"💨 Fan Ortalaması: {df['fan'].mean():.2f}")
-    print("="*30)
+    print("\n" + "="*40)
+    print(f"🏆 TEST TAMAMLANDI")
+    print(f"📊 Final MAE: {df['error'].mean():.4f}")
+    print(f"🎮 Toplam Kontrol Sinyali: {df['is_control_step'].sum()}")
+    print("="*40)
 
-    # Sonuçları CSV olarak kaydet (Analiz için)
-    df.to_csv("simulation_results_v4.csv", index=False)
-    print("💾 Sonuçlar 'simulation_results_v4.csv' dosyasına kaydedildi.")
+    df.to_csv("simulation_21600_steps.csv", index=False)
 
 if __name__ == "__main__":
-    run_production_simulation()
+    run_high_resolution_simulation()

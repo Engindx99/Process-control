@@ -1,5 +1,10 @@
 python main.py
 
+python main_twin.py
+
+python -m Bayesian_optimization.optuna_study
+
+
 python -m experiments.analysis.visualizations.eva
 
 python -m experiments.analysis.visualizations.dt_plot
