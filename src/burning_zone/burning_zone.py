@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import logging
+from torch import sigmoid
 
 
 class RotaryKilnPlant:
@@ -25,17 +26,13 @@ class RotaryKilnPlant:
         self.fuel = 18.5
         self.fan = 950.0
 
-        # tuned params
         self.k_heat = np.random.normal(1.0, 0.1)
-        self.k_leak = 0.02
         self.tau_gas = 6.0
         self.tau_pressure = 18.0
 
-        # thermal
         self.dt = 1.0
         self.C_th = 9000.0
 
-        # noise
         self.noise_o2 = 0.0
         self.noise_temp = 0.0
         self.noise_pressure = 0.0
@@ -67,20 +64,23 @@ class RotaryKilnPlant:
         return 1.0 / (1.0 + np.exp(-(o2 - 2.5)))
 
     # =========================
-    # AIR FLOW (bounded physical)
+    # AIR FLOW
     # =========================
     def air_flow(self):
-        x = (self.fan - 950) / 500.0
-        return np.clip(0.6 + 0.8 * np.tanh(x), 0.2, 2.0)
+        if self.fan < 50:
+            return 0.0
+
+        x = (self.fan - 950) / 300.0
+        return 2.0 * (1 / (1 + np.exp(-x)))
 
     # =========================
-    # HEAT LOSS (stable physics)
+    # HEAT LOSS
     # =========================
     def heat_loss(self, T, fan):
         T_ref = 1450.0
 
-        radiation = 0.3 * ((T / T_ref) ** 4 - (298 / T_ref) ** 4)
-        convection = 0.000011 * fan * (T - 25)
+        radiation = 0.35 * ((T / T_ref) ** 4 - (298 / T_ref) ** 4)
+        convection = 0.0025 * (1 + fan / 1500.0) * (T - 25)
 
         return radiation + convection
 
@@ -89,22 +89,17 @@ class RotaryKilnPlant:
     # =========================
     def step(self, fuel_cmd, fan_cmd):
 
-        # actuator lag
         self.fuel += 0.1 * (fuel_cmd - self.fuel)
         self.fan += 0.15 * (fan_cmd - self.fan)
 
         self.history_fuel.append(self.fuel)
         fuel = self.history_fuel.pop(0)
 
-        # =========================
         # AIR FLOW
-        # =========================
         air_flow = self.air_flow()
         O2_in = 0.21 * air_flow
 
-        # =========================
         # PRESSURE
-        # =========================
         resistance = 0.5 * self.pressure + 0.2 * (self.temp - 1450) / 300
         pressure_target = -3.0 + 2.0 * (air_flow - 1.0) - resistance
 
@@ -114,24 +109,20 @@ class RotaryKilnPlant:
         self.pressure += self.noise_pressure
         self.pressure = np.clip(self.pressure, -6.0, -1.0)
 
-        # =========================
         # O2 DYNAMICS
-        # =========================
         eff = self.combustion_eff(self.o2)
 
         o2_sink = 0.05 * fuel * eff
-        mixing = (2.6 - self.o2) / self.tau_gas
+        mixing = ((2.6 - self.o2) / self.tau_gas) * (self.fan / 950.0)
 
         self.noise_o2 = 0.3 * self.noise_o2 + np.random.normal(0, 0.02)
 
-        self.o2 += 0.1 * (O2_in - o2_sink + mixing + self.k_leak)
+        self.o2 += 0.1 * (O2_in - o2_sink + mixing)
         self.o2 += self.noise_o2
-        self.o2 = np.clip(self.o2, 0.3, 5.0)
+        self.o2 = np.clip(self.o2, 0.0, 5.0)
 
-        # =========================
-        # COMBUSTION (CRITICAL FIX)
-        # =========================
-        o2_limit = np.tanh(self.o2 / 2.5 * 3.0)  # saturation
+        # COMBUSTION
+        o2_limit = 1 / (1 + np.exp(-10 * (self.o2 - 0.9)))
 
         draft_effect = np.exp(-0.000002 * (self.fan - 950) ** 2)
 
@@ -141,25 +132,23 @@ class RotaryKilnPlant:
 
         heat_gen = combustion * self.k_heat
 
-        # =========================
         # HEAT LOSS
-        # =========================
         heat_loss = self.heat_loss(self.temp, self.fan)
 
-        # =========================
         # TEMPERATURE DYNAMICS
-        # =========================
         dT = (heat_gen - heat_loss) / self.C_th
         self.temp += self.dt * dT
 
-        self.noise_temp = 0.1 * self.noise_temp + np.random.normal(0, 0.02)
+        # 🔥 FIXED TEMPERATURE NOISE (only change)
+        self.noise_temp = (
+            0.8 * self.noise_temp +
+            np.random.normal(0, 0.006 * (self.temp / 1450.0))
+        )
         self.temp += self.noise_temp
 
         self.temp = np.clip(self.temp, 1200.0, 1650.0)
 
-        # =========================
         # LOG
-        # =========================
         self.step_count += 1
 
         record = self.state()
@@ -171,9 +160,8 @@ class RotaryKilnPlant:
     # =========================
     # RUN
     # =========================
-    def run(self, steps=20000, fuel_cmd=25, fan_cmd=1400):
+    def run(self, steps=21600, fuel_cmd=10.0, fan_cmd=510.0):
         self.reset()
-
         for _ in range(steps):
             self.step(fuel_cmd, fan_cmd)
 

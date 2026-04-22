@@ -2,12 +2,24 @@
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
     "python.defaultInterpreterPath": "python",
+    // =========================
+    // TERMINAL FIX (CRITICAL)
+    // =========================
     "terminal.integrated.defaultProfile.windows": "Git Bash",
     "terminal.integrated.profiles.windows": {
         "Git Bash": {
-            "path": "C:\\Program Files\\Git\\git-bash.exe"
+            "path": "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+            "args": [
+                "--login",
+                "-i"
+            ]
         }
     },
+    // ✅ CURSOR FIX (kalın imleç problemi)
+    "terminal.integrated.cursorStyle": "line",
+    "terminal.integrated.cursorBlinking": true,
+    "editor.cursorStyle": "line",
+    "editor.cursorBlinking": "blink",
     // =========================
     // EDITOR BEHAVIOR
     // =========================

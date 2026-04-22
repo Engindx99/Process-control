@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from burning_zone.burning_zone import RotaryKilnPlant
+from src.burning_zone.burning_zone import RotaryKilnPlant
 
 # --- Ayarlar ---
 TOTAL_MINUTES = 360
