@@ -2,7 +2,7 @@ plant:
   seed: 42 
 
 system:
-  step_duration_sec: 1  # Dijital ikizindeki dt=1.0 ile uyumlu
+  step_duration_sec: 1
   setpoint: 1450.0
   target_o2: 2.2
   fan_min: 0.0          
@@ -11,25 +11,25 @@ system:
 mpc:
   initial_fuel: 18.0
   initial_fan: 900.0
-  prediction_horizon: 120
+  prediction_horizon: 130
   control_horizon: 20
   
-  # --- LİMİTLER (v10.10 Kalman Final Sonuçları) ---
+  # --- LİMİTLER (v10.12 Final Master) ---
   fuel_min: 0.0
   fuel_max: 30.0             
-  max_delta_fuel: 1.480087  # Optimize edilmiş vana hızı
-  max_delta_fan: 113.5534   # Kararlı oksijen geçişleri için dengelenmiş limit
+  max_delta_fuel: 1.4340    # Koruyucu vana hızı
+  max_delta_fan: 115.0238   # Optimize edilmiş fan limitleri
   
-  # --- AĞIRLIKLAR (v10.10 Kalman Entegre Best Params) ---
-  weight_temp: 137132.4366  # Hassas sıcaklık takibi
-  weight_o2: 9985.0129      # Maksimum oksijen kararlılığı (Kalman destekli)
-  weight_fuel_chg: 18877.0022 # Aktüatör koruma katsayısı
-  weight_fan_chg: 4516.7773   # Fan dalgalanma önleyici
+  # --- AĞIRLIKLAR (v10.12 Final Master) ---
+  weight_temp: 128516.0262  # Dengelenmiş sıcaklık takibi
+  weight_o2: 10939.4008     # Maksimum oksijen kararlılığı
+  weight_fuel_chg: 59877.4086 # Yüksek korumalı yakıt cezası (Vana dostu)
+  weight_fan_chg: 12096.9355  # Artırılmış fan değişim cezası
   
 kalman:
   q_o2: 0.0001
   q_press: 0.001
-  measurement_noise: 0.08   # Test grafiğindeki en verimli değer
+  measurement_noise: 0.08   
 
 hardware:
   num_cpu: 1

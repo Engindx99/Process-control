@@ -16,11 +16,11 @@ def plot_kiln_results(df):
     fig1.suptitle("State Evolution", fontsize=16)
 
     # Temperature
-    axs1[0].plot(t, df["temp"], lw=1.3)
+    axs1[0].plot(t, df["temp"], lw=1.2)
     axs1[0].set_title("Temperature (°C)")
     axs1[0].axhline(1450, linestyle="--")
     axs1[0].grid()
-    axs1[0].set_ylim(1440, 1460)
+    axs1[0].set_ylim(1430, 1470)
 
     # O2
     axs1[1].plot(t, df["o2"], lw=1.3)
@@ -55,7 +55,7 @@ plant = RotaryKilnPlant()
 
 steps = 21600
 fuel_val = 18
-fan_val = 850
+fan_val = 900
 
 print(f"Simülasyon başlatılıyor: {steps} adım...")
 

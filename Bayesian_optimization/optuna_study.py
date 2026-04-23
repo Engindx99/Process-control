@@ -52,19 +52,18 @@ def objective(trial):
         
         # Hız Limitleri (Biraz daha esneklik tanıdık: 1.4 - 1.7)
         # Kalman gürültüyü süzdüğü için vana hızını artırmak artık tehlikeli değil
-        'max_delta_fuel': trial.suggest_float('max_delta_fuel', 1.45, 1.65), 
-        'max_delta_fan': trial.suggest_float('max_delta_fan', 105.0, 120.0),  
+        'max_delta_fuel': trial.suggest_float('max_delta_fuel', 1.1, 1.5), 
+        'max_delta_fan': trial.suggest_float('max_delta_fan', 90.0, 120.0),  
         
         # Ağırlıklar (130k - 150k ve 8k - 10k)
         # O2 ağırlığını 10k'ya kadar yolu var, bakalım Kalman sonrası ne diyecek
-        'weight_temp': trial.suggest_float('weight_temp', 135000.0, 145000.0),
-        'weight_o2': trial.suggest_float('weight_o2', 8500.0, 10000.0), 
+        'weight_temp': trial.suggest_float('weight_temp', 125000.0, 150000.0),
+        'weight_o2': trial.suggest_float('weight_o2', 8500.0, 11000.0), 
         
-        # Değişim Cezaları (Daha geniş bir bant: 15k - 20k)
-        'weight_fuel_chg': trial.suggest_float('weight_fuel_chg', 15000.0, 20000.0),
-        'weight_fan_chg': trial.suggest_float('weight_fan_chg', 4000.0, 5000.0),
+        'weight_fuel_chg': trial.suggest_float('weight_fuel_chg', 50000.0, 100000.0),
+        'weight_fan_chg': trial.suggest_float('weight_fan_chg', 8000.0, 15000.0),
         
-        'prediction_horizon': 120,
+        'prediction_horizon': 130,
         'control_horizon': 20
     })
 

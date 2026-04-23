@@ -25,14 +25,14 @@ class RotaryKilnPlant:
         self.fuel = 18.5
         self.fan = 950.0
 
-        self.k_heat = 0.28
+        self.k_heat = 0.351
 
         self.tau_gas = 6.0
         self.tau_pressure = 18.0
         self.tau_co2 = 30.0
 
         self.dt = 1.0
-        self.C_th = 3000.0
+        self.C_th = 740 #(Thermal mass)
 
         self.noise_o2 = 0.0
         self.noise_temp = 0.0
@@ -75,7 +75,7 @@ class RotaryKilnPlant:
         T_ref = 1450.0
 
         radiation = 0.33 * ((T / T_ref) ** 4.15 - (298 / T_ref) ** 4.15)
-        convection = 0.0034 * (1 + np.tanh((fan - 900) / 350)) * (T - 25)
+        convection = 0.0038 * (1 + 0.6 * np.tanh((fan - 900.0) / 2070.0)) * (T - 25)
 
         return radiation + convection
 
@@ -107,8 +107,8 @@ class RotaryKilnPlant:
         
         eff = self.combustion_eff(self.o2)
 
-        o2_sink = 0.045 * fuel * eff
-        mixing = (2.6 - self.o2) / self.tau_gas
+        o2_sink = 0.031 * fuel * eff
+        mixing = 2 * (2.2 - self.o2) / self.tau_gas
 
         self.o2 += 0.1 * (O2_in - o2_sink + mixing)
         self.o2 += np.random.normal(0, 0.01)
@@ -154,7 +154,7 @@ class RotaryKilnPlant:
         dT = (heat_gen - heat_loss) / self.C_th
         self.temp += self.dt * dT
 
-        self.temp += np.random.normal(0, 0.02 * (self.temp / 1450.0))
+        self.temp += np.random.normal(0, 0.04 * (self.temp / 1450.0))
         self.temp = np.clip(self.temp, 1200.0, 1650.0)
 
         # LOG
