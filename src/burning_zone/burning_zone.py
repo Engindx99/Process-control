@@ -179,7 +179,7 @@ class RotaryKilnPlant:
     # =========================
     # RUN
     # =========================
-    def run(self, steps=21600, fuel_cmd=18.7, fan_cmd=900):
+    def run(self, steps=21600, fuel_cmd=20, fan_cmd=900):
         self.reset()
         for _ in range(steps):
             self.step(fuel_cmd, fan_cmd)

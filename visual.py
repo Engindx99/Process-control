@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
-def visualize_6h_analysis(csv_path="kiln_6h_results.csv"):
+def visualize_6h_analysis(csv_path="mpc_optim.csv"):
     try:
         df = pd.read_csv(csv_path)
     except FileNotFoundError:

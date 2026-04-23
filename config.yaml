@@ -2,27 +2,29 @@ plant:
   seed: 42 
 
 system:
-  step_duration_sec: 10
+  step_duration_sec: 1  # Dijital ikizindeki dt=1.0 ile uyumlu
   setpoint: 1450.0
   target_o2: 2.2
+  fan_min: 0.0          
+  fan_max: 1200.0       
 
 mpc:
-  initial_fuel: 23.0
-  initial_fan: 950.0
-  prediction_horizon: 200
+  initial_fuel: 18.0
+  initial_fan: 900.0
+  prediction_horizon: 100
   control_horizon: 20
   
-  # --- LİMİTLER ---
+  # --- LİMİTLER (Optuna v10.6 Breakthrough Sonuçları) ---
   fuel_min: 0.0
-  fuel_max: 120.0             
-  max_delta_fuel: 0.15       
-  max_delta_fan: 30.0        
+  fuel_max: 25.0             
+  max_delta_fuel: 1.1488    # Fırının ataletini yenmek için optimize edilmiş hız
+  max_delta_fan: 136.2374   # Oksijen dengesini korumak için esnetilmiş limit
   
-  # --- OPTUNA v8 PRECISION SONUÇLARI ---
-  weight_temp: 887953.5432       # Sıcaklık takibi için en yüksek öncelik
-  weight_o2: 964.1953            # O2 dengesi kararlı hale getirildi
-  weight_fuel_chg: 46252.1783    # Yakıt değişimleri (vana ömrü) korundu
-  weight_fan_chg: 8935.5149      # Fan titreşimleri minimize edildi
+  # --- AĞIRLIKLAR (Bayesian Optimization Best Params) ---
+  weight_temp: 229781.0193      
+  weight_o2: 3930.1893         
+  weight_fuel_chg: 23738.8255
+  weight_fan_chg: 1385.9295     
 
 kalman:
   process_noise: 0.0001
