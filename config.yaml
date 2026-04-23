@@ -11,24 +11,25 @@ system:
 mpc:
   initial_fuel: 18.0
   initial_fan: 900.0
-  prediction_horizon: 100
+  prediction_horizon: 120
   control_horizon: 20
   
-  # --- LİMİTLER (Optuna v10.6 Breakthrough Sonuçları) ---
+  # --- LİMİTLER (v10.10 Kalman Final Sonuçları) ---
   fuel_min: 0.0
-  fuel_max: 25.0             
-  max_delta_fuel: 1.1488    # Fırının ataletini yenmek için optimize edilmiş hız
-  max_delta_fan: 136.2374   # Oksijen dengesini korumak için esnetilmiş limit
+  fuel_max: 30.0             
+  max_delta_fuel: 1.480087  # Optimize edilmiş vana hızı
+  max_delta_fan: 113.5534   # Kararlı oksijen geçişleri için dengelenmiş limit
   
-  # --- AĞIRLIKLAR (Bayesian Optimization Best Params) ---
-  weight_temp: 229781.0193      
-  weight_o2: 3930.1893         
-  weight_fuel_chg: 23738.8255
-  weight_fan_chg: 1385.9295     
-
+  # --- AĞIRLIKLAR (v10.10 Kalman Entegre Best Params) ---
+  weight_temp: 137132.4366  # Hassas sıcaklık takibi
+  weight_o2: 9985.0129      # Maksimum oksijen kararlılığı (Kalman destekli)
+  weight_fuel_chg: 18877.0022 # Aktüatör koruma katsayısı
+  weight_fan_chg: 4516.7773   # Fan dalgalanma önleyici
+  
 kalman:
-  process_noise: 0.0001
-  measurement_noise: 0.6    
+  q_o2: 0.0001
+  q_press: 0.001
+  measurement_noise: 0.08   # Test grafiğindeki en verimli değer
 
 hardware:
   num_cpu: 1

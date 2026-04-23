@@ -52,6 +52,18 @@ def plot_kiln_results(df):
     plt.show()
 
 plant = RotaryKilnPlant()
-df = plant.run(steps=21600, fuel_cmd=18, fan_cmd=850)
 
+steps = 21600
+fuel_val = 18
+fan_val = 850
+
+print(f"Simülasyon başlatılıyor: {steps} adım...")
+
+for _ in range(steps):
+    plant.step(fuel_cmd=fuel_val, fan_cmd=fan_val)
+
+# Veriyi dijital ikizin içindeki listeden DataFrame'e dönüştürüyoruz
+df = pd.DataFrame(plant.data)
+
+# Görselleştirme fonksiyonunu çağırıyoruz
 plot_kiln_results(df)

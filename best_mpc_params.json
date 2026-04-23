@@ -1,0 +1,13 @@
+{
+    "study_name": "kiln_v10_10_kalman_final",
+    "best_score_weighted": 11.5906,
+    "estimated_mae": 2.3181,
+    "params": {
+        "max_delta_fuel": 1.480087366992375,
+        "max_delta_fan": 113.5534312297341,
+        "weight_temp": 137132.43666560823,
+        "weight_o2": 9985.01292477538,
+        "weight_fuel_chg": 18877.002249727768,
+        "weight_fan_chg": 4516.777266854313
+    }
+}
