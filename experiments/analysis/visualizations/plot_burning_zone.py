@@ -1,56 +1,57 @@
 import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
 from src.burning_zone.burning_zone import RotaryKilnPlant
+import numpy as np
+import pandas as pd
+import logging
 
-# --- Ayarlar ---
-TOTAL_MINUTES = 360
-STEPS = TOTAL_MINUTES * 60  # 1 sn adımlarla
-SETPOINT_TEMP = 1450
+logging.basicConfig(level=logging.INFO)
 
-# 1. Veri Üretimi
-plant = RotaryKilnPlant(seed=None)
-df = plant.run(steps=STEPS)
+def plot_kiln_results(df):
+    t = df["step"]
 
-# 2. Hesaplamalar
-t_min = (df["step"]) / 60
-# Verimlilik hesapla
-df["efficiency"] = df["o2"].apply(lambda x: 1.0 / (1.0 + np.exp(-(x - 2.5))) * 100)
+    # =========================================
+    # FIGURE 1 → STATE EVOLUTION (3 grafik)
+    # =========================================
+    fig1, axs1 = plt.subplots(3, 1, figsize=(12, 10))
+    fig1.suptitle("State Evolution", fontsize=16)
 
-# İLİŞKİYİ GÖRÜNÜR KILAN ADIM: Hareketli Ortalama (Smoothing)
-# Son 5 dakikanın (300 saniye) ortalamasını alarak gürültüyü temizliyoruz
-df["eff_smooth"] = df["efficiency"].rolling(window=300).mean()
+    # Temperature
+    axs1[0].plot(t, df["temp"], lw=1.3)
+    axs1[0].set_title("Temperature (°C)")
+    axs1[0].axhline(1450, linestyle="--")
+    axs1[0].grid()
+    axs1[0].set_ylim(1440, 1460)
 
-# --- GÖRSELLEŞTİRME (TEK PANEL, ÇİFT EKSEN) ---
-fig, ax1 = plt.subplots(figsize=(15, 7))
+    # O2
+    axs1[1].plot(t, df["o2"], lw=1.3)
+    axs1[1].set_title("O2 (%)")
+    axs1[1].axhline(2.2, linestyle="--")
+    axs1[1].grid()
 
-# Sol Eksen: Sıcaklık
-color_temp = 'tab:red'
-ax1.set_xlabel('Zaman (Dakika)', fontsize=12)
-ax1.set_ylabel('Sıcaklık (°C)', color=color_temp, fontsize=12, fontweight='bold')
-line1 = ax1.plot(t_min, df["temp"], color=color_temp, linewidth=1.5, label="Fırın Sıcaklığı")
-ax1.axhline(y=SETPOINT_TEMP, color='black', linestyle='--', alpha=0.5)
-ax1.tick_params(axis='y', labelcolor=color_temp)
-ax1.set_ylim(1400, 1500) # İlişkiyi görmek için zum yapıyoruz
+    # CO2
+    axs1[2].plot(t, df["co2"], lw=1.3)
+    axs1[2].set_title("CO2 (%)")
+    axs1[2].grid()
 
-# Sağ Eksen: Verimlilik
-ax2 = ax1.twinx() 
-color_eff = 'tab:green'
-ax2.set_ylabel('Düzleştirilmiş Verimlilik (%)', color=color_eff, fontsize=12, fontweight='bold')
-# Orijinal veriyi çok silik arka planda, düzleştirilmiş veriyi net gösteriyoruz
-ax2.plot(t_min, df["efficiency"], color=color_eff, alpha=0.1) 
-line2 = ax2.plot(t_min, df["eff_smooth"], color=color_eff, linewidth=2, label="Düzleştirilmiş Verimlilik (5dk Ort)")
-ax2.tick_params(axis='y', labelcolor=color_eff)
-ax2.set_ylim(20, 60) # Verimlilik aralığını grafiğe göre daraltıyoruz
+    plt.tight_layout()
 
-# Estetik Ayarlar
-plt.title("Yanma Verimliliği ve Sıcaklık Arasındaki Dinamik İlişki", fontsize=14)
-ax1.grid(True, linestyle=':', alpha=0.6)
+    # =========================================
+    # FIGURE 2 → CONTROL & RELATIONS (Sadece Basınç)
+    # =========================================
+    
+    fig2, axs2 = plt.subplots(1, 1, figsize=(12, 5)) 
+    fig2.suptitle("Control & Coupling Diagnostics", fontsize=16)
 
-# Lejant Birleştirme
-lines = line1 + line2
-labels = [l.get_label() for l in lines]
-ax1.legend(lines, labels, loc='upper left')
+    # Pressure
+    axs2.plot(t, df["pressure"], lw=1.3)
+    axs2.set_title("Pressure")
+    axs2.axhline(-3.0, linestyle="--")
+    axs2.grid()
 
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.show()
+
+plant = RotaryKilnPlant()
+df = plant.run(steps=21600, fuel_cmd=18, fan_cmd=850)
+
+plot_kiln_results(df)
