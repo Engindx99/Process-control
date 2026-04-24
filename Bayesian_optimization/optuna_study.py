@@ -3,7 +3,7 @@ import yaml
 import numpy as np
 import copy
 import logging
-from src.burning_zone.burning_zone import RotaryKilnPlant
+from Rotaryklin.Rotary_klin import RotaryKilnPlant
 from src.mpc.mpc import MPC
 
 # --- KALMAN FILTRESI (Gürültü Süzücü) ---

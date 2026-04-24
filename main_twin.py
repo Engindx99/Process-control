@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import logging
 import copy
-from src.burning_zone.burning_zone import RotaryKilnPlant
+from Rotaryklin.Rotary_klin import RotaryKilnPlant
 from src.mpc.mpc import MPC 
 from src.filters.kalman import KalmanFilter
 

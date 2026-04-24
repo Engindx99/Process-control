@@ -2,12 +2,11 @@ python main.py
 
 python main_twin.py
 
+python -m experiments.analysis.visualizations.plot_rotary_klin.
+
 python -m Bayesian_optimization.optuna_study
 
-
 python -m experiments.analysis.visualizations.eva
-
-python -m experiments.analysis.visualizations.plot_burning_zone
 
 python -m src.filters.test_kalman
 

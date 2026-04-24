@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import yaml
 import os
-from src.burning_zone.burning_zone import RotaryKilnPlant
+from Rotaryklin.Rotary_klin import RotaryKilnPlant
 from src.filters.kalman import SelectiveKalmanFilter
 
 def run_test():
