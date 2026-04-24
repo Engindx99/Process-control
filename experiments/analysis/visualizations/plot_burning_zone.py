@@ -10,10 +10,9 @@ def plot_kiln_results(df):
     t = df["step"]
 
     # =========================================
-    # FIGURE 1 → STATE EVOLUTION (3 grafik)
+    # FIGURE 1 → STATE  (3 grafik)
     # =========================================
     fig1, axs1 = plt.subplots(3, 1, figsize=(12, 10))
-    fig1.suptitle("State Evolution", fontsize=16)
 
     # Temperature
     axs1[0].plot(t, df["temp"], lw=1.2)
@@ -40,7 +39,6 @@ def plot_kiln_results(df):
     # =========================================
     
     fig2, axs2 = plt.subplots(1, 1, figsize=(12, 5)) 
-    fig2.suptitle("Control & Coupling Diagnostics", fontsize=16)
 
     # Pressure
     axs2.plot(t, df["pressure"], lw=1.3)
@@ -54,8 +52,8 @@ def plot_kiln_results(df):
 plant = RotaryKilnPlant()
 
 steps = 21600
-fuel_val = 18
-fan_val = 900
+fuel_val = 19
+fan_val = 1000
 
 print(f"Simülasyon başlatılıyor: {steps} adım...")
 
