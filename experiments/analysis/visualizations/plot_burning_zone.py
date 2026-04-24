@@ -15,20 +15,20 @@ def plot_kiln_results(df):
     fig1, axs1 = plt.subplots(3, 1, figsize=(12, 10))
 
     # Temperature
-    axs1[0].plot(t, df["temp"], lw=1.2)
+    axs1[0].plot(t, df["temp"], color="#D62728", lw=1.2)
     axs1[0].set_title("Temperature (°C)")
     axs1[0].axhline(1450, linestyle="--")
     axs1[0].grid()
     axs1[0].set_ylim(1430, 1470)
 
     # O2
-    axs1[1].plot(t, df["o2"], lw=1.3)
+    axs1[1].plot(t, df["o2"], color="#4682B4", lw=1.3)
     axs1[1].set_title("O2 (%)")
     axs1[1].axhline(2.2, linestyle="--")
     axs1[1].grid()
 
     # CO2
-    axs1[2].plot(t, df["co2"], lw=1.3)
+    axs1[2].plot(t, df["co2"], color="#708090", lw=1.3)
     axs1[2].set_title("CO2 (%)")
     axs1[2].grid()
 
@@ -43,7 +43,7 @@ def plot_kiln_results(df):
     # Pressure
     axs2.plot(t, df["pressure"], lw=1.3)
     axs2.set_title("Pressure")
-    axs2.axhline(-3.0, linestyle="--")
+    axs2.axhline(-2.0, linestyle="--")
     axs2.grid()
 
     plt.tight_layout()
@@ -52,8 +52,8 @@ def plot_kiln_results(df):
 plant = RotaryKilnPlant()
 
 steps = 21600
-fuel_val = 19
-fan_val = 1000
+fuel_val = 18
+fan_val = 960
 
 print(f"Simülasyon başlatılıyor: {steps} adım...")
 

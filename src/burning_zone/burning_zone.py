@@ -109,7 +109,7 @@ class RotaryKilnPlant:
         draft_effect = np.exp(-0.0000012 * (self.fan - 900) ** 2)
         combustion = fuel * o2_gate * draft_effect
 
-# --- CO2 DYNAMICS (Kalsinasyon Baskın & Pozitif Korelasyon) ---
+        # --- CO2 DYNAMICS (Kalsinasyon Baskın & Pozitif Korelasyon) ---
         # 1. Yanma Kaynaklı Üretim Bileşenleri
         o2_consumed_local = 0.035 * combustion  # Yanma hızına bağlı O2 tüketimi
         co2_yield_local = 1.4 + 0.2 * o2_gate    # O2 varlığına bağlı verim
@@ -145,7 +145,7 @@ class RotaryKilnPlant:
         # TEMPERATURE DYNAMICS
         dT = (heat_gen - heat_loss) / self.C_th
         self.temp += self.dt * dT
-        self.temp += np.random.normal(0, 0.04 * (self.temp / 1450.0))
+        self.temp += np.random.normal(0, 0.03 * (self.temp / 1450.0))
         self.temp = np.clip(self.temp, 1200.0, 1650.0)
 
         # LOG

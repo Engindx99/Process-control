@@ -30,12 +30,11 @@ plt.figure(figsize=(12, 9))
 
 # --- ÜST PANEL: SICAKLIK ---
 plt.subplot(2, 1, 1)
-plt.plot(df["second"], df["temp"], color='#D62728', lw=1.5, label="Fırın Sıcaklığı")
+plt.plot(df["second"], df["temp"], color='#D62728', lw=1.0, label="Temperature (°C)")
 plt.axhline(y=1450, color='black', linestyle='--', alpha=0.6, label="Setpoint (1450)")
 plt.ylim(1440, 1460)
 plt.yticks(np.arange(1440, 1461, 5))
-plt.ylabel("Sıcaklık (°C)")
-plt.title("Hassas Sıcaklık Analizi")
+plt.ylabel("Temperature (°C)")
 plt.legend(loc="upper right")
 plt.grid(True, linestyle=':', alpha=0.6)
 
@@ -48,20 +47,8 @@ plt.plot(df["second"], df['fuel_flow_rate'], color='#E67E22', lw=2, label="Fuel 
 
 plt.xlabel("Time (second)")
 plt.ylabel("Fuel (kg/h)")
-plt.title("Yakıt: Kontrol Komutu vs. Gerçek Akış")
 plt.legend(loc="upper right")
 plt.grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.show()
-
-# =========================
-# DİĞERLERİ: SIRAYLA GELENLER
-# =========================
-other_columns = ["o2", "filt_o2", "pressure", "filt_press", "fan", "error"]
-for col in other_columns:
-    plt.figure()
-    plt.plot(df["second"], df[col])
-    plt.title(f"{col} vs Time")
-    plt.grid(True)
-    plt.show()
