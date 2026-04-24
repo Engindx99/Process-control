@@ -3,7 +3,7 @@ import json
 
 # 1. Veritabanı bilgilerini tanımla
 DB_PATH = "sqlite:///fast_kiln.db" # Veritabanı dosya adın
-STUDY_NAME = "kiln_v10_10_kalman_final"       # Optuna çalışmandaki isim
+STUDY_NAME = "kiln_v10_16_ultra_smooth"       # Optuna çalışmandaki isim
 
 try:
     # 2. Mevcut çalışmayı veritabanından yükle

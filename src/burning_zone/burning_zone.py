@@ -25,14 +25,14 @@ class RotaryKilnPlant:
         self.fuel = 18.5
         self.fan = 950.0
 
-        self.k_heat = 0.351
+        self.k_heat = 0.371
 
         self.tau_gas = 6.0
         self.tau_pressure = 18.0
         self.tau_co2 = 30.0
 
         self.dt = 1.0
-        self.C_th = 740 #(Thermal mass)
+        self.C_th = 1400 #(Thermal mass)
 
         self.noise_o2 = 0.0
         self.noise_temp = 0.0
