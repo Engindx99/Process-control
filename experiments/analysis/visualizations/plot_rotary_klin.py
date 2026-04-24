@@ -70,9 +70,18 @@ def plot_kiln_results(df):
         axs1[idx].set_ylabel(f"{titles[idx]} (°C)")
         axs1[idx].grid(True, alpha=0.2)
         
-        # Burning Zone özel limit koruması
+
+        if col == "T1":
+            axs1[idx].set_ylim(700, 900)
+            
+        if col == "T2":
+            axs1[idx].set_ylim(1000, 1150)
+
         if col == "T3":
             axs1[idx].set_ylim(1430, 1470)
+            
+        if col == "T4":
+           axs1[idx].set_ylim(750, 1050)
 
     # Sağ tarafta yazıların sığması için biraz boşluk bırak
     plt.subplots_adjust(right=0.88) 
