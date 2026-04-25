@@ -1,138 +1,79 @@
 import numpy as np
-import matplotlib.pyplot as plt
 
-SIGMA = 5.67e-8
+class KilnPlant:
 
-
-class RotaryKilnFeedbackModel:
-    def __init__(self, N=50, dt=0.1):
+    def __init__(self, N=60):
 
         self.N = N
-        self.dt = dt
+        self.dt = 0.05
+        self.dx = 1.0
 
-        self.Cp_s = 1000
-        self.Cp_g = 1200
-
-        self.m_s = 50.0
-        self.m_g = 20.0
-
-        self.h = 25.0
-        self.A = 2.0
-        self.eps = 0.85
-
+        # states
         self.Ts = np.ones(N) * 1100
         self.Tg = np.ones(N) * 1400
+        self.Xc = np.zeros(N)
 
-        self.fuel = 1.0
+        # physical params (scaled)
+        self.Cps = 1000
+        self.Cpg = 900          # 🔥 reduced inertia (important)
+        self.h = 22
 
-        self.Kp = 0.02
-        self.Ki = 0.001
-        self.error_int = 0.0
+        self.vs = 0.03
+        self.vg = 1.0
 
-        self.Tset = 1450
+        self.k0 = 1.5
+        self.E = 75000
+        self.R = 8.314
+        self.dH = 1.5e5
 
-    def convection(self, i):
-        return self.h * self.A * (self.Tg[i] - self.Ts[i])
+        # 🔥 stronger actuator gain
+        self.Qcomb_base = 5.5e5
 
-    def radiation(self, i):
-        return self.eps * SIGMA * self.A * (self.Tg[i]**4 - self.Ts[i]**4)
+        # 🔥 actuator dynamics (VERY IMPORTANT INDUSTRIAL FEATURE)
+        self.u_filt = 0.7
+        self.tau_u = 3.0
 
-    def combustion(self):
-        return 5e5 * self.fuel
+    def reaction(self, T, X):
+        T = np.clip(T, 600, 2000)
+        return self.k0 * np.exp(-self.E / (self.R * T)) * (1 - X)
 
-    def feedback_control(self):
-        error = self.Tset - np.mean(self.Ts)
-        self.error_int += error * self.dt
+    def advect(self, T, v):
+        T_new = T.copy()
+        cfl = np.clip(v * self.dt / self.dx, 0, 0.7)
 
-        self.fuel = self.Kp * error + self.Ki * self.error_int
-        self.fuel = np.clip(self.fuel, 0.2, 3.0)
+        for i in range(1, self.N):
+            T_new[i] = T[i] - cfl * (T[i] - T[i-1])
 
-    def step(self):
+        return T_new
 
-        self.feedback_control()
+    def step(self, u):
 
-        Ts_new = self.Ts.copy()
-        Tg_new = self.Tg.copy()
+        # 🔥 actuator first-order lag (CRITICAL)
+        u = np.clip(u, 0.0, 1.0)
+        self.u_filt += (self.dt/self.tau_u) * (u - self.u_filt)
 
-        Qcomb = self.combustion()
+        self.Ts = self.advect(self.Ts, self.vs)
+        self.Tg = self.advect(self.Tg, self.vg)
+
+        Tg_mean = np.mean(self.Tg)
 
         for i in range(self.N):
 
-            Qconv = self.convection(i)
-            Qrad = self.radiation(i)
+            r = self.reaction(self.Ts[i], self.Xc[i])
 
-            dTs = (Qconv + Qrad) / (self.m_s * self.Cp_s)
-            dTg = (Qcomb - Qconv - Qrad) / (self.m_g * self.Cp_g)
+            Qrxn = -self.dH * r
+            Qconv = self.h * (self.Tg[i] - self.Ts[i])
 
-            Ts_new[i] += self.dt * dTs
-            Tg_new[i] += self.dt * dTg
+            damp = 1.0 / (1.0 + (Tg_mean - 1500)/700)
+            Qcomb = self.Qcomb_base * self.u_filt * damp
 
-        self.Ts = Ts_new
-        self.Tg = Tg_new
+            T = np.clip(self.Tg[i], 300, 2000)
+            Qrad = 3e-8 * (T**4 - 300**4)
 
-        return self.Ts, self.Tg, self.fuel
+            self.Ts[i] += self.dt * (Qconv + Qrxn) / self.Cps
+            self.Tg[i] += self.dt * (Qcomb - Qconv - Qrad) / self.Cpg
+            self.Xc[i] += self.dt * r
 
+        self.Xc = np.clip(self.Xc, 0, 1)
 
-# =========================================================
-# SIMULATION + VISUALIZATION
-# =========================================================
-
-model = RotaryKilnFeedbackModel(N=60, dt=0.1)
-
-steps = 300
-
-Ts_hist = []
-Tg_hist = []
-fuel_hist = []
-
-x = np.linspace(0, 60, model.N)
-
-plt.ion()
-fig, axs = plt.subplots(3, 1, figsize=(12, 10))
-
-for t in range(steps):
-
-    Ts, Tg, fuel = model.step()
-
-    Ts_hist.append(np.mean(Ts))
-    Tg_hist.append(np.mean(Tg))
-    fuel_hist.append(fuel)
-
-    # =========================
-    # 1) Spatial profile
-    # =========================
-    axs[0].cla()
-    axs[0].plot(x, Ts, label="Solid Temp")
-    axs[0].plot(x, Tg, label="Gas Temp")
-    axs[0].set_title("Kiln Temperature Profile")
-    axs[0].set_ylabel("Temperature (K)")
-    axs[0].legend()
-    axs[0].grid()
-
-    # =========================
-    # 2) Time evolution
-    # =========================
-    axs[1].cla()
-    axs[1].plot(Ts_hist, label="Ts mean")
-    axs[1].plot(Tg_hist, label="Tg mean")
-    axs[1].axhline(model.Tset, linestyle="--", color="red", label="Setpoint")
-    axs[1].set_title("Temperature Tracking")
-    axs[1].set_ylabel("K")
-    axs[1].legend()
-    axs[1].grid()
-
-    # =========================
-    # 3) Control signal
-    # =========================
-    axs[2].cla()
-    axs[2].plot(fuel_hist, label="Fuel Input")
-    axs[2].set_title("Feedback Control Signal")
-    axs[2].set_ylabel("Fuel")
-    axs[2].set_xlabel("Time step")
-    axs[2].legend()
-    axs[2].grid()
-
-    plt.pause(0.01)
-
-plt.ioff()
-plt.show()
+        return self.Ts.copy(), self.Tg.copy(), self.Xc.copy()

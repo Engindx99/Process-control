@@ -2,6 +2,8 @@ python main.py
 
 python main_twin.py
 
+python -m src.Rotaryklin.main
+
 python -m src.Rotaryklin.Rotary_klin
 
 python -m experiments.analysis.visualizations.plot_rotary_klin

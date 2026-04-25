@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import logging
 import copy
-from Rotaryklin.Rotary_klin import RotaryKilnPlant
+from Rotaryklin.Rotary_klin import KilnPlant
 from src.mpc.mpc import MPC 
 from src.filters.kalman import KalmanFilter
 
@@ -21,7 +21,7 @@ def run_twin_engine():
         return
 
     # 2. Bileşenleri Başlat
-    plant = RotaryKilnPlant(seed=42) 
+    plant = KilnPlant(seed=42) 
     obs = plant.reset() 
     mpc = MPC(config) 
     kf = KalmanFilter(config) 
