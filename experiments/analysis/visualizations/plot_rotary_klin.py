@@ -1,65 +1,113 @@
-import matplotlib
-matplotlib.use("TkAgg")
-
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+from src.Rotaryklin.Rotary_klin import Kiln1D, SIGMA
 
+def visualize_kiln_advanced(kiln, history):
+    """
+    Non-lineer etkileri (ısı sıçraması, kalsinasyon hızı) ön plana çıkaran 
+    gelişmiş fırın dashboard'u.
+    """
+    # Veri Hazırlığı
+    steps = np.arange(len(history))
+    t_burn = np.array([h["T_burning"] for h in history])
+    x_mean = np.array([h["X_mean"] for h in history])
+    o2_exit = np.array([h["O2_out"] for h in history])
+    
+    x_axis = np.linspace(0, kiln.L, kiln.N)
+    
+    # Isı Akışı ve Gradyan Analizi (Doğrusallığı görmek için)
+    dT_dx = np.gradient(kiln.Ts - 273) # Malzeme sıcaklık değişim hızı
 
-def plot_kiln(df):
+    # Plot Ayarları
+    plt.style.use('dark_background') # Daha profesyonel görünüm için
+    fig = plt.figure(figsize=(18, 11))
+    fig.suptitle(f"Rotary Kiln Digital Twin - Steady State Analysis", fontsize=18, y=0.95)
+    gs = GridSpec(3, 3, figure=fig)
 
-    t = df["step"]
+    # 1. ANA PROFİL: SICAKLIK (Geniş Üst Panel)
+    ax1 = fig.add_subplot(gs[0, :])
+    ax1.plot(x_axis, kiln.Tg - 273, color='#3498db', label='Gaz (Alev)', linewidth=1.5, alpha=0.6)
+    ax1.plot(x_axis, kiln.Ts - 273, color='#f39c12', label='Malzeme (Klinker)', linewidth=3)
+    ax1.fill_between(x_axis, kiln.Ts - 273, color='#f39c12', alpha=0.1)
+    ax1.set_title("Fırın Boyu Sıcaklık Dağılımı ve Isıl Sıçrama Bölgesi", fontsize=14)
+    ax1.set_ylabel("Sıcaklık (°C)")
+    ax1.grid(True, alpha=0.2)
+    ax1.legend()
 
-    fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
+    # 2. ISIL KAZANÇ HIZI (Doğrusallığın kırıldığı yer)
+    ax2 = fig.add_subplot(gs[1, 0])
+    ax2.fill_between(x_axis, dT_dx, color='#e74c3c', alpha=0.3)
+    ax2.plot(x_axis, dT_dx, color='#e74c3c', linewidth=2)
+    ax2.set_title("Isıl Kazanç Gradyanı (dT/dx)")
+    ax2.set_ylabel("Sıcaklık Artış Hızı")
+    ax2.grid(True, alpha=0.2)
 
-    # =========================
-    # TEMPERATURES
-    # =========================
-    axs[0].plot(t, df["T1"], label="Preheat")
-    axs[0].plot(t, df["T2"], label="Calcination")
-    axs[0].legend()
-    axs[0].set_ylabel("°C")
-    axs[0].grid(True)
+    # 3. KALSİNASYON VE CO2 (Reaksiyon Takibi)
+    ax3 = fig.add_subplot(gs[1, 1])
+    ax3.plot(x_axis, kiln.X_calc, color='#9b59b6', linewidth=2.5, label='Kalsinasyon %')
+    ax3_twin = ax3.twinx()
+    ax3_twin.plot(x_axis, kiln.CO2 * 100, color='#1abc9c', linestyle='--', label='CO2 %')
+    ax3.set_title("Reaksiyon İlerlemesi")
+    ax3.set_ylim(0, 1.1)
+    ax3.grid(True, alpha=0.2)
+    ax3.legend(loc='upper left')
 
-    axs[1].plot(t, df["T3"], color="darkred", label="Burning")
-    axs[1].legend()
-    axs[1].set_ylabel("°C")
-    axs[1].grid(True)
+    # 4. RADYASYON AKISI (Enerji Transferi)
+    ax4 = fig.add_subplot(gs[1, 2])
+    q_rad = (SIGMA * kiln.eps * (kiln.Tg**4 - kiln.Ts**4)) / 1000
+    ax4.bar(x_axis, q_rad, width=0.8, color='#f1c40f', alpha=0.5)
+    ax4.set_title("Radyasyon Enerji Akısı (kW/m²)")
+    ax4.grid(True, alpha=0.2)
 
-    axs[2].plot(t, df["T4"], label="Cooling", color="cyan")
-    axs[2].legend()
-    axs[2].set_ylabel("°C")
-    axs[2].grid(True)
+    # 5. ZAMANSAL GELİŞİM: BURNING ZONE
+    ax5 = fig.add_subplot(gs[2, 0])
+    ax5.plot(steps, t_burn, color='#e67e22')
+    ax5.axhline(1450, color='red', linestyle='--')
+    ax5.set_title("Burning Zone Sıcaklık Evrimi")
+    ax5.set_xlabel("Adım")
+    ax5.set_ylabel("°C")
 
-    # =========================
-    # GAS + QUALITY
-    # =========================
-    axs[3].plot(t, df["o2"], label="O2")
-    axs[3].plot(t, df["pressure"], label="Pressure")
-    axs[3].plot(t, df["fuel"], label="Fuel")
-    axs[3].legend()
-    axs[3].grid(True)
+    # 6. ZAMANSAL GELİŞİM: KALSİNASYON DERECESİ
+    ax6 = fig.add_subplot(gs[2, 1])
+    ax6.plot(steps, x_mean, color='#9b59b6')
+    ax6.set_title("Ortalama Kalsinasyon (Zaman)")
+    ax6.set_ylim(0, 1)
 
-    plt.tight_layout()
-    plt.show(block=True)
+    # 7. O2 ÇIKIŞI (Emisyon Takibi)
+    ax7 = fig.add_subplot(gs[2, 2])
+    ax7.plot(steps, o2_exit, color='#2ecc71')
+    ax7.set_title("Çıkış O2 Kararlılığı")
+    ax7.set_ylabel("Mole Oranı")
 
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
 
-# =========================
-# TEST DATA (kritik eksik buydu)
-# =========================
+# =========================================================
+# ÇALIŞTIRMA BLOĞU
+# =========================================================
 if __name__ == "__main__":
+    # N değerini çok yüksek tutma, dx büyüdükçe kararlılık artar
+    kiln = Kiln1D(N=60, L=60) 
+    history = []
 
-    print("Plot başlıyor...")
+    print("Simülasyon başlıyor...")
+    # Patlamayı önlemek için ilk 1000 adımda yakıtı sabit tutalım (Isınma evresi)
+    for t in range(5000):
+        if t < 1000:
+            kiln.fuel = 34.0
+        else:
+            # Salınımı çok yavaşlat (0.01 yerine 0.002)
+            kiln.fuel = 34 + 1.5 * np.sin(t * 0.002)
+        
+        # dt değerini 0.001'e çekmek patlamayı %99 durdurur
+        res = kiln.step(dt=0.001) 
+        history.append(res)
 
-    df = pd.DataFrame({
-        "step": np.arange(200),
-        "T1": np.random.normal(800, 10, 200),
-        "T2": np.random.normal(1050, 15, 200),
-        "T3": np.random.normal(1450, 20, 200),
-        "T4": np.random.normal(900, 10, 200),
-        "o2": np.random.normal(3, 0.2, 200),
-        "pressure": np.random.normal(-2, 0.1, 200),
-        "fuel": np.random.normal(19, 0.5, 200),
-    })
+        # Hata kontrolü: Eğer sıcaklık saçmalarsa simülasyonu durdur
+        if np.isnan(res['T_burning']) or res['T_burning'] > 5000:
+            print(f"Sayısal patlama oluştu! Adım: {t}")
+            break
 
-    plot_kiln(df)
+    print(f"Simülasyon bitti. Final T_burn: {history[-1]['T_burning']:.2f} °C")
+    visualize_kiln_advanced(kiln, history)

@@ -1,146 +1,79 @@
 import numpy as np
 
-# =========================================================
-# ZONE MODEL
-# =========================================================
-class KilnZone:
-    def __init__(self, T0, inertia):
-        self.T = T0
-        self.inertia = inertia
+SIGMA = 5.67e-8
+R = 8.314
 
-    def update(self, Q_in, T_up, loss):
-        conduction = 0.6 * (T_up - self.T)
-        radiation = 2e-11 * ((self.T + 273.15)**4 - 298**4)
+class Kiln1D:
+    def __init__(self, N=60, L=60):
+        self.N, self.L = N, L
+        self.dx = L / N
+        self.eps = 0.95 # Emisiviteyi biraz artırdık (radyasyon transferi için)
+        self.h = 220    # Konveksiyon katsayısı (150-250 arası idealdir)
 
-        dT = (Q_in + conduction - loss*(self.T - 25) - radiation)
-        dT *= (1.2e-5 * self.inertia)
+        # Başlangıç Koşulları
+        self.Ts = np.linspace(250 + 273, 1300 + 273, N)
+        self.Tg = np.linspace(800 + 273, 2000 + 273, N)
+        self.O2 = np.ones(N) * 0.21
+        self.CO2 = np.ones(N) * 0.05
+        self.X_calc = np.linspace(0.0, 1.0, N)
 
-        self.T += dT
-        return self.T
+        # Fiziksel Parametreler
+        self.u_s, self.u_g = 0.012, 1.8
+        self.rho_s, self.rho_g = 1500, 1.1
+        self.Cp_s, self.Cp_g = 1150, 1250
+        self.fuel = 36.5 # 1450C hedefi için optimize yakıt miktarı
 
+    def step(self, dt=0.002):
+        # Önceki değerleri sakla
+        Ts_old, Tg_old, X_old = self.Ts.copy(), self.Tg.copy(), self.X_calc.copy()
 
-# =========================================================
-# ACTUATOR MODEL
-# =========================================================
-class ActuatorSystem:
-    def __init__(self):
-        self.fuel = 18.5
-        self.fan = 950.0
-        self.fuel_buf = [18.5]*80
-        self.fan_buf = [950.0]*40
+        # 1. TAŞINIM (Upwind)
+        self.Ts[1:] -= (self.u_s * dt / self.dx) * (Ts_old[1:] - Ts_old[:-1])
+        self.Tg[:-1] += (self.u_g * dt / self.dx) * (Tg_old[1:] - Tg_old[:-1])
 
-    def process(self, fuel_cmd, fan_cmd):
-        self.fuel_buf.append(np.clip(fuel_cmd, 0, 40))
-        self.fan_buf.append(np.clip(fan_cmd, 500, 1200))
+        # 2. ISI TRANSFERİ (Radyasyon + Konveksiyon)
+        # Delta T'yi kapatmak için transferi daha efektif hesaplıyoruz
+        q_rad = SIGMA * self.eps * (Tg_old**4 - Ts_old**4)
+        q_conv = self.h * (Tg_old - Ts_old)
+        
+        # 3. REAKSİYONLAR
+        # Kalsinasyon hızı (Arrhenius)
+        r_calc = 1.2e5 * np.exp(-145000 / (R * np.clip(Ts_old, 300, 2500))) * (1 - X_old)
+        dX = np.clip(r_calc * dt, 0, 0.01)
+        self.X_calc = np.clip(X_old + dX, 0, 1)
 
-        tf = self.fuel_buf.pop(0)
-        tn = self.fan_buf.pop(0)
+        # Yanma (Alev profili - Daha yayvan ve kararlı)
+        x_coords = np.linspace(0, self.L, self.N)
+        flame = np.exp(-((x_coords - 55)**2) / 45)
+        r_comb = (self.fuel * 0.008) * flame * dt
 
-        self.fuel += 0.01*(tf - self.fuel)
-        self.fan  += 0.015*(tn - self.fan)
+        # 4. ENERJİ DENGESİ
+        # Isı Kayıpları (Fırın kabuğu kaybı - 1500C üzerinde denge kurar)
+        q_loss = 18.0 * (Ts_old - 320) 
 
-        return self.fuel, self.fan
+        # Malzeme ısınma ataleti (Kalsinasyon biterken ısınma hızlanır)
+        material_inertia = self.rho_s * self.Cp_s * (0.12 + 0.08 * (1 - self.X_calc))
+        gas_inertia = self.rho_g * self.Cp_g
 
+        dT_s = (q_conv + q_rad - (r_calc * 175000) - q_loss) * dt / material_inertia
+        dT_g = (-q_conv - q_rad + (r_comb * 4.2e7)) * dt / gas_inertia
 
-# =========================================================
-# SIGNAL PROCESSOR
-# =========================================================
-class SignalProcessor:
-    def apply(self, T, o2, pressure, fuel, lhv):
-        noise = lambda x: x + np.random.normal(0, 0.02)
+        # 5. GÜNCELLEME VE LİMİTLEME (Zikzakları önler)
+        self.Ts += np.clip(dT_s, -5, 5)
+        self.Tg += np.clip(dT_g, -8, 8)
+        
+        # Gaz Bileşimi (Zikzakları önlemek için katsayıyı düşürdük)
+        self.O2 = np.clip(self.O2 - r_comb * 0.1, 0.01, 0.21)
+        self.CO2 = np.clip(self.CO2 + r_comb * 0.1 + dX * 0.05, 0.02, 0.35)
+
+        # 6. SINIR KOŞULLARI
+        self.Ts[0] = 300 + 273
+        self.Tg[-1] = 2050 + 273 
+        self.O2[-1] = 0.21
 
         return {
-            "T1": noise(T["preheat"]),
-            "T2": noise(T["calcination"]),
-            "T3": noise(T["burning"]),
-            "T4": noise(T["cooling"]),
-            "o2": noise(o2),
-            "pressure": noise(pressure),
-            "fuel": fuel,
-            "LHV": lhv
+            "T_burning": float(self.Ts[int(self.N * 0.95)] - 273),
+            "O2_out": float(self.O2[0]),
+            "CO2_out": float(self.CO2[0]),
+            "X_mean": float(np.mean(self.X_calc))
         }
-
-
-# =========================================================
-# MAIN PLANT
-# =========================================================
-class RotaryKilnPlant:
-    def __init__(self):
-
-        self.actuators = ActuatorSystem()
-        self.signal = SignalProcessor()
-
-        self.zones = {
-            "preheat": KilnZone(850, 0.4),
-            "calcination": KilnZone(1100, 0.25),
-            "burning": KilnZone(1450, 0.12),
-            "cooling": KilnZone(800, 0.3)
-        }
-
-        self.o2 = 3.2
-        self.pressure = -1.5
-
-        self.gas_T = 1200.0
-        self.gas_inertia = 8000.0
-
-    # =====================================================
-    def step(self, fuel_cmd, fan_cmd):
-
-        # -------------------------
-        # actuator
-        # -------------------------
-        fuel, fan = self.actuators.process(fuel_cmd, fan_cmd)
-
-        # -------------------------
-        # combustion
-        # -------------------------
-        eta_o2 = 1/(1 + np.exp(-(self.o2 - 2.2)))
-        eta_temp = 1/(1 + np.exp(-(self.zones["burning"].T - 1300)/100))
-
-        Q_chem = fuel * 7200 * eta_o2 * eta_temp * 0.6
-
-        # -------------------------
-        # gas energy (stable)
-        # -------------------------
-        heat_sink = 0
-        for z in self.zones.values():
-            heat_sink += 0.001 * (self.gas_T - z.T)
-
-        self.gas_T += (Q_chem - heat_sink) / self.gas_inertia
-        self.gas_T = np.clip(self.gas_T, 800, 2000)
-
-        # -------------------------
-        # zones
-        # -------------------------
-        T = {k: z.T for k, z in self.zones.items()}
-
-        self.zones["burning"].T += 0.01 * (self.gas_T - T["burning"])
-        self.zones["calcination"].T += 0.007 * (T["burning"] - T["calcination"])
-        self.zones["preheat"].T += 0.005 * (T["calcination"] - T["preheat"])
-        self.zones["cooling"].T += 0.004 * (T["burning"] - T["cooling"])
-
-        # -------------------------
-        # gas chemistry
-        # -------------------------
-        air = 2.0/(1 + np.exp(-(fan - 900)/200))
-
-        self.o2 += 0.04*(0.21*air - 0.02*fuel - self.o2)
-        self.o2 = np.clip(self.o2, 0.5, 5.5)
-
-        self.pressure += 0.05*((-2.5 + 1.5*(air-1)) - self.pressure)
-
-        # -------------------------
-        # quality
-        # -------------------------
-        fcao = np.clip(2.5 - 0.0025*self.zones["burning"].T, 0.2, 3.5)
-
-        # -------------------------
-        # output
-        # -------------------------
-        return self.signal.apply(
-            T=self.zones,
-            o2=self.o2,
-            pressure=self.pressure,
-            fuel=fuel,
-            lhv=7200
-        )
