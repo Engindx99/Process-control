@@ -1,79 +1,138 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 SIGMA = 5.67e-8
-R = 8.314
 
-class Kiln1D:
-    def __init__(self, N=60, L=60):
-        self.N, self.L = N, L
-        self.dx = L / N
-        self.eps = 0.95 # Emisiviteyi biraz artırdık (radyasyon transferi için)
-        self.h = 220    # Konveksiyon katsayısı (150-250 arası idealdir)
 
-        # Başlangıç Koşulları
-        self.Ts = np.linspace(250 + 273, 1300 + 273, N)
-        self.Tg = np.linspace(800 + 273, 2000 + 273, N)
-        self.O2 = np.ones(N) * 0.21
-        self.CO2 = np.ones(N) * 0.05
-        self.X_calc = np.linspace(0.0, 1.0, N)
+class RotaryKilnFeedbackModel:
+    def __init__(self, N=50, dt=0.1):
 
-        # Fiziksel Parametreler
-        self.u_s, self.u_g = 0.012, 1.8
-        self.rho_s, self.rho_g = 1500, 1.1
-        self.Cp_s, self.Cp_g = 1150, 1250
-        self.fuel = 36.5 # 1450C hedefi için optimize yakıt miktarı
+        self.N = N
+        self.dt = dt
 
-    def step(self, dt=0.002):
-        # Önceki değerleri sakla
-        Ts_old, Tg_old, X_old = self.Ts.copy(), self.Tg.copy(), self.X_calc.copy()
+        self.Cp_s = 1000
+        self.Cp_g = 1200
 
-        # 1. TAŞINIM (Upwind)
-        self.Ts[1:] -= (self.u_s * dt / self.dx) * (Ts_old[1:] - Ts_old[:-1])
-        self.Tg[:-1] += (self.u_g * dt / self.dx) * (Tg_old[1:] - Tg_old[:-1])
+        self.m_s = 50.0
+        self.m_g = 20.0
 
-        # 2. ISI TRANSFERİ (Radyasyon + Konveksiyon)
-        # Delta T'yi kapatmak için transferi daha efektif hesaplıyoruz
-        q_rad = SIGMA * self.eps * (Tg_old**4 - Ts_old**4)
-        q_conv = self.h * (Tg_old - Ts_old)
-        
-        # 3. REAKSİYONLAR
-        # Kalsinasyon hızı (Arrhenius)
-        r_calc = 1.2e5 * np.exp(-145000 / (R * np.clip(Ts_old, 300, 2500))) * (1 - X_old)
-        dX = np.clip(r_calc * dt, 0, 0.01)
-        self.X_calc = np.clip(X_old + dX, 0, 1)
+        self.h = 25.0
+        self.A = 2.0
+        self.eps = 0.85
 
-        # Yanma (Alev profili - Daha yayvan ve kararlı)
-        x_coords = np.linspace(0, self.L, self.N)
-        flame = np.exp(-((x_coords - 55)**2) / 45)
-        r_comb = (self.fuel * 0.008) * flame * dt
+        self.Ts = np.ones(N) * 1100
+        self.Tg = np.ones(N) * 1400
 
-        # 4. ENERJİ DENGESİ
-        # Isı Kayıpları (Fırın kabuğu kaybı - 1500C üzerinde denge kurar)
-        q_loss = 18.0 * (Ts_old - 320) 
+        self.fuel = 1.0
 
-        # Malzeme ısınma ataleti (Kalsinasyon biterken ısınma hızlanır)
-        material_inertia = self.rho_s * self.Cp_s * (0.12 + 0.08 * (1 - self.X_calc))
-        gas_inertia = self.rho_g * self.Cp_g
+        self.Kp = 0.02
+        self.Ki = 0.001
+        self.error_int = 0.0
 
-        dT_s = (q_conv + q_rad - (r_calc * 175000) - q_loss) * dt / material_inertia
-        dT_g = (-q_conv - q_rad + (r_comb * 4.2e7)) * dt / gas_inertia
+        self.Tset = 1450
 
-        # 5. GÜNCELLEME VE LİMİTLEME (Zikzakları önler)
-        self.Ts += np.clip(dT_s, -5, 5)
-        self.Tg += np.clip(dT_g, -8, 8)
-        
-        # Gaz Bileşimi (Zikzakları önlemek için katsayıyı düşürdük)
-        self.O2 = np.clip(self.O2 - r_comb * 0.1, 0.01, 0.21)
-        self.CO2 = np.clip(self.CO2 + r_comb * 0.1 + dX * 0.05, 0.02, 0.35)
+    def convection(self, i):
+        return self.h * self.A * (self.Tg[i] - self.Ts[i])
 
-        # 6. SINIR KOŞULLARI
-        self.Ts[0] = 300 + 273
-        self.Tg[-1] = 2050 + 273 
-        self.O2[-1] = 0.21
+    def radiation(self, i):
+        return self.eps * SIGMA * self.A * (self.Tg[i]**4 - self.Ts[i]**4)
 
-        return {
-            "T_burning": float(self.Ts[int(self.N * 0.95)] - 273),
-            "O2_out": float(self.O2[0]),
-            "CO2_out": float(self.CO2[0]),
-            "X_mean": float(np.mean(self.X_calc))
-        }
+    def combustion(self):
+        return 5e5 * self.fuel
+
+    def feedback_control(self):
+        error = self.Tset - np.mean(self.Ts)
+        self.error_int += error * self.dt
+
+        self.fuel = self.Kp * error + self.Ki * self.error_int
+        self.fuel = np.clip(self.fuel, 0.2, 3.0)
+
+    def step(self):
+
+        self.feedback_control()
+
+        Ts_new = self.Ts.copy()
+        Tg_new = self.Tg.copy()
+
+        Qcomb = self.combustion()
+
+        for i in range(self.N):
+
+            Qconv = self.convection(i)
+            Qrad = self.radiation(i)
+
+            dTs = (Qconv + Qrad) / (self.m_s * self.Cp_s)
+            dTg = (Qcomb - Qconv - Qrad) / (self.m_g * self.Cp_g)
+
+            Ts_new[i] += self.dt * dTs
+            Tg_new[i] += self.dt * dTg
+
+        self.Ts = Ts_new
+        self.Tg = Tg_new
+
+        return self.Ts, self.Tg, self.fuel
+
+
+# =========================================================
+# SIMULATION + VISUALIZATION
+# =========================================================
+
+model = RotaryKilnFeedbackModel(N=60, dt=0.1)
+
+steps = 300
+
+Ts_hist = []
+Tg_hist = []
+fuel_hist = []
+
+x = np.linspace(0, 60, model.N)
+
+plt.ion()
+fig, axs = plt.subplots(3, 1, figsize=(12, 10))
+
+for t in range(steps):
+
+    Ts, Tg, fuel = model.step()
+
+    Ts_hist.append(np.mean(Ts))
+    Tg_hist.append(np.mean(Tg))
+    fuel_hist.append(fuel)
+
+    # =========================
+    # 1) Spatial profile
+    # =========================
+    axs[0].cla()
+    axs[0].plot(x, Ts, label="Solid Temp")
+    axs[0].plot(x, Tg, label="Gas Temp")
+    axs[0].set_title("Kiln Temperature Profile")
+    axs[0].set_ylabel("Temperature (K)")
+    axs[0].legend()
+    axs[0].grid()
+
+    # =========================
+    # 2) Time evolution
+    # =========================
+    axs[1].cla()
+    axs[1].plot(Ts_hist, label="Ts mean")
+    axs[1].plot(Tg_hist, label="Tg mean")
+    axs[1].axhline(model.Tset, linestyle="--", color="red", label="Setpoint")
+    axs[1].set_title("Temperature Tracking")
+    axs[1].set_ylabel("K")
+    axs[1].legend()
+    axs[1].grid()
+
+    # =========================
+    # 3) Control signal
+    # =========================
+    axs[2].cla()
+    axs[2].plot(fuel_hist, label="Fuel Input")
+    axs[2].set_title("Feedback Control Signal")
+    axs[2].set_ylabel("Fuel")
+    axs[2].set_xlabel("Time step")
+    axs[2].legend()
+    axs[2].grid()
+
+    plt.pause(0.01)
+
+plt.ioff()
+plt.show()
