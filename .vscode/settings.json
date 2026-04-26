@@ -3,6 +3,25 @@
     "python-envs.defaultPackageManager": "ms-python.python:conda",
     "python.defaultInterpreterPath": "python",
     // =========================
+    // UNICODE / TURKISH CHARACTER FIX (FIXES THE "BOX" ISSUE)
+    // =========================
+    "editor.unicodeHighlight.ambiguousCharacters": false,
+    "editor.unicodeHighlight.nonBasicASCII": false,
+    "editor.unicodeHighlight.allowedCharacters": {
+        "ı": true,
+        "ğ": true,
+        "ü": true,
+        "ş": true,
+        "ö": true,
+        "ç": true,
+        "İ": true,
+        "Ğ": true,
+        "Ü": true,
+        "Ş": true,
+        "Ö": true,
+        "Ç": true
+    },
+    // =========================
     // TERMINAL FIX (CRITICAL)
     // =========================
     "terminal.integrated.defaultProfile.windows": "Git Bash",
@@ -26,17 +45,22 @@
     // EDITOR BEHAVIOR
     // =========================
     "editor.formatOnSave": true,
-    "editor.formatOnPaste": true, // 🔥 IMPORTANT (FIX COPY-PASTE ISSUE)
-    "editor.insertSpaces": true, // 🔥 force spaces instead of tabs
+    "editor.formatOnPaste": true,
+    "editor.insertSpaces": true,
     "editor.tabSize": 4,
-    "editor.detectIndentation": false, // 🔥 prevents auto-mixing tabs/spaces
+    "editor.detectIndentation": false,
     "editor.codeActionsOnSave": {
         "source.organizeImports": "explicit"
     },
     // =========================
     // WHITESPACE DEBUG (OPTIONAL BUT VERY USEFUL)
     // =========================
-    "editor.renderWhitespace": "all", // 🔥 shows hidden tab/space issues
+    "editor.renderWhitespace": "all",
+    // =========================
+    // FILE ENCODING (PREVENTS CORRUPTION)
+    // =========================
+    "files.encoding": "utf8",
+    "files.autoGuessEncoding": true,
     // =========================
     // PYTHON QUALITY TOOLING
     // =========================

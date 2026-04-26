@@ -1,38 +1,6 @@
-study_name: kiln_v10_16_ultra_smooth
-
-plant:
-  seed: 42 
-
-system:
-  step_duration_sec: 1
-  setpoint: 1450.0
-  target_o2: 2.2
-  fan_min: 0.0          
-  fan_max: 1200.0       
-
-mpc:
-  initial_fuel: 18.0
-  initial_fan: 900.0
-  prediction_horizon: 130
-  control_horizon: 20
-  
-  # --- LIMITS (OPTIMIZED) ---
-  fuel_min: 10.0
-  fuel_max: 25.0
-  max_delta_fuel: 0.06184719804597715
-  max_delta_fan: 70.62620625518153
-  
-  # --- WEIGHTS (OPTIMIZED - weighted score: 6.9733 | est MAE: 1.3947) ---
-  weight_temp: 109016.73168150675
-  weight_o2: 11255.437791863693
-  weight_fuel_chg: 68257.41426844709
-  weight_fan_chg: 8715.625790368904
-  
-kalman:
-  q_o2: 0.0001
-  q_press: 0.001
-  measurement_noise: 0.08   
-
-hardware:
-  num_cpu: 1
-  device: "cpu"
+preheater:
+  stages: 4           # Siklon sayısı
+  surface_area: 120.5 # m^2
+  heat_loss_coeff: 0.15
+  material_cp: 1.02   # kJ/kgK
+  gas_cp: 1.15        # kJ/kgK
