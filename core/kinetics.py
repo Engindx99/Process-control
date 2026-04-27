@@ -31,10 +31,10 @@ def calc_clinker_kinetics(T_solid, c_cao, c_c2s, c_c3s):
         return 0, 0, 0
 
     # C2S Oluşumu (CaO + SiO2 -> C2S)
-    rate_c2s =  np.exp(-150000 / (8.314 * T_solid)) * c_cao
+    rate_c2s =  np.exp(-150000 / (R * T_solid)) * c_cao
     
     # C3S Oluşumu (C2S + CaO -> C3S) - Daha yüksek sıcaklık ister
-    rate_c3s =  np.exp(-165000 / (8.314 * T_solid)) * c_c2s * (c_cao > 0.01)
+    rate_c3s =  np.exp(-220000 / (R * T_solid)) * c_c2s * (c_cao > 0.01)
 
     # Ekzotermik Isı Salınımı (J/kg)
     # Kalsinasyonun aksine sisteme ısı verirler

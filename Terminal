@@ -1,1 +1,5 @@
 python main.py
+
+python -m optimization.bayesian_opt
+
+optuna-dashboard sqlite:///kiln_final_push.db

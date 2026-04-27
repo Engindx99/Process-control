@@ -1,0 +1,25 @@
+control_horizon: 10
+fuel_lb: 1800.0
+fuel_ub: 2273.15
+geometry:
+  length: 60.0
+  n_zones: 60
+physics:
+  cp_gas: 1100.0
+  cp_solid: 1000.0
+  dt: 0.05
+  rho_solid: 1500.0
+  velocity: 0.0001
+prediction_horizon: 100
+prediction_step_size: 60.0
+simulation:
+  control_interval: 250
+  save_interval: 100000
+  steps: 50000
+target_c3s: 0.6
+target_caco3: 0.02
+velocity: 1.1079086985755575e-05
+weight_c2s: 97963.73466496283
+weight_calc: 9494.087815712235
+weight_quality: 6643222.515049035
+weight_smooth: 3945.2656797672303

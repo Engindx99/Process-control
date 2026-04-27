@@ -17,6 +17,7 @@ class KilnConfig:
     # --- Simülasyon Ayarları ---
     simulation_steps: int
     control_interval: int
+    save_interval: int  # YAML'da var, buraya ekledik
     
     # --- MPC / Kontrol Parametreleri ---
     prediction_horizon: int
@@ -25,8 +26,10 @@ class KilnConfig:
     fuel_lb: float
     fuel_ub: float
     target_caco3: float
+    target_c2s: float  # EKLENDİ: Ara ürün hedefi
     target_c3s: float
     weight_calc: float
+    weight_c2s: float    # EKLENDİ: Bayesian Opt. için kritik!
     weight_quality: float
     weight_smooth: float
     
@@ -39,38 +42,35 @@ class KilnConfig:
         with open(path, 'r') as f:
             data = yaml.safe_load(f)
             
-        # Hiyerarşik bloklar (Hala YAML içinde blok olanlar)
         geo = data.get('geometry', {})
         phys = data.get('physics', {})
         sim = data.get('simulation', {})
         
-        # DİKKAT: Artık 'control' bloğu yok, veriler doğrudan 'data' içinde!
-            
+        # Dataclass başlatılırken hata almamak için tüm değerleri güvenli çekiyoruz
         return cls(
-            # Geometri (Hiyerarşik)
             length=float(geo.get('length', 60.0)),
             n_zones=int(geo.get('n_zones', 60)),
             
-            # Fizik (Hiyerarşik)
             dt=float(phys.get('dt', 0.1)),
             velocity=float(phys.get('velocity', 0.02)),
             rho_solid=float(phys.get('rho_solid', 1500.0)),
             cp_solid=float(phys.get('cp_solid', 1000.0)),
             cp_gas=float(phys.get('cp_gas', 1100.0)),
             
-            # Simülasyon (Hiyerarşik)
             simulation_steps=int(sim.get('steps', 40000)),
             control_interval=int(sim.get('control_interval', 100)),
+            save_interval=int(sim.get('save_interval', 2000)),
             
-            # Kontrol (MPC) - Doğrudan ana sözlükten (data) okunuyor
             prediction_horizon=int(data.get('prediction_horizon', 100)),
             control_horizon=int(data.get('control_horizon', 10)),
             prediction_step_size=float(data.get('prediction_step_size', 40.0)),
-            fuel_lb=float(data.get('fuel_lb', 2000.0)),
-            fuel_ub=float(data.get('fuel_ub', 3000.0)),
+            fuel_lb=float(data.get('fuel_lb', 1800.0)),
+            fuel_ub=float(data.get('fuel_ub', 2273.15)),
             target_caco3=float(data.get('target_caco3', 0.02)),
+            target_c2s=float(data.get('target_c2s', 0.25)), # Varsayılan hedef
             target_c3s=float(data.get('target_c3s', 0.60)),
-            weight_calc=float(data.get('weight_calc', 5000.0)),
-            weight_quality=float(data.get('weight_quality', 15000.0)),
+            weight_calc=float(data.get('weight_calc', 50000.0)),
+            weight_c2s=float(data.get('weight_c2s', 25000.0)), # Bayesian Opt. karşılığı
+            weight_quality=float(data.get('weight_quality', 150000.0)),
             weight_smooth=float(data.get('weight_smooth', 100.0))
         )
